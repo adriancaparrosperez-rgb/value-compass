@@ -182,9 +182,6 @@ else:
         "application/json",
     )
 
-        st.download_button("Descargar CSV", df.to_csv(index=False).encode("utf-8"), f"{universe_name}_radar.csv", "text/csv")
-        st.download_button("Descargar JSON", df.to_json(orient="records", force_ascii=False, indent=2), f"{universe_name}_radar.json", "application/json")
-
 elif page == "Análisis individual":
     st.header("Ficha individual")
     ticker = st.text_input("Ticker", "ITX.MC").strip().upper()
