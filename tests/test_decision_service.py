@@ -716,3 +716,4 @@ def test_original_sources_are_not_modified(
     )
     assert analysis.sources == original_sources
     assert len(analysis.sources) == 1
+
