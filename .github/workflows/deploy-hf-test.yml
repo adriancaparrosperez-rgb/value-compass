@@ -25,6 +25,6 @@ jobs:
           git config user.name "github-actions"
 
           git remote add hf-test \
-            https://adriancaparrosperez-rgb:${HF_TOKEN}@huggingface.co/spaces/adriancaparrosperez-rgb/value-compass-test
-
+            https://AdrianCP:${HF_TOKEN}@huggingface.co/spaces/AdrianCP/value_compass_test
+            
           git push --force hf-test HEAD:main
