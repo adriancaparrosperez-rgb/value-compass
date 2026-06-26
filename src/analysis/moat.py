@@ -391,7 +391,7 @@ def assess_moat(
             "y el riesgo de disrupción alto; debe revisarse."
         )
 
-        return MoatAssessment(
+    return MoatAssessment(
         strength=strength,
         trend=trend,
         confidence=confidence,
