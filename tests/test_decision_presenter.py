@@ -382,7 +382,7 @@ def test_unknown_failed_gate_severity_is_neutral() -> None:
     )
     assert len(view.gates) == 1
     assert view.gates[0].tone == "neutral"
-def test_non_boolean_gate_passed_defaults_to_false() -> None:
+def test_non_boolean_gate_passed_is_ignored_with_warning() -> None:
     response = _success_response()
     response["decision"]["gates"] = [
         {
@@ -395,9 +395,12 @@ def test_non_boolean_gate_passed_defaults_to_false() -> None:
     view = build_decision_view(
         response
     )
-    assert len(view.gates) == 1
-    assert view.gates[0].passed is False
-    assert view.gates[0].tone == "negative"
+    assert view.gates == []
+    assert any(
+        "sin un valor booleano válido"
+        in warning.casefold()
+        for warning in view.presentation_warnings
+    )
 def test_ranking_components_are_created() -> None:
     view = build_decision_view(
         _success_response()
@@ -589,6 +592,11 @@ def test_error_response_with_non_mapping_error_is_safe() -> None:
         "No se pudo preparar el resultado "
         "del análisis."
     )
+    assert any(
+        "campo error válido"
+        in warning.casefold()
+        for warning in view.presentation_warnings
+    )
 def test_missing_success_field_raises_error() -> None:
     with pytest.raises(
         DecisionPresenterError,
@@ -714,6 +722,18 @@ def test_ticker_mismatch_generates_integrity_warning() -> None:
         in warning.casefold()
         for warning in view.presentation_warnings
     )
+def test_ticker_comparison_is_case_insensitive() -> None:
+    response = _success_response()
+    response["ticker"] = "test"
+    response["decision"]["ticker"] = "TEST"
+    view = build_decision_view(
+        response
+    )
+    assert not any(
+        "ticker de la respuesta no coincide"
+        in warning.casefold()
+        for warning in view.presentation_warnings
+    )
 @pytest.mark.parametrize(
     ("field_name", "expected_text"),
     [
@@ -811,7 +831,7 @@ def test_duplicate_gate_is_ignored_case_insensitively() -> None:
         in warning.casefold()
         for warning in view.presentation_warnings
     )
-def test_missing_gate_code_receives_generated_identifier() -> None:
+def test_missing_gate_code_is_ignored_with_warning() -> None:
     response = _success_response()
     response["decision"]["gates"] = [
         {
@@ -823,8 +843,12 @@ def test_missing_gate_code_receives_generated_identifier() -> None:
     view = build_decision_view(
         response
     )
-    assert len(view.gates) == 1
-    assert view.gates[0].code == "UNKNOWN_GATE_0"
+    assert view.gates == []
+    assert any(
+        "sin código válido"
+        in warning.casefold()
+        for warning in view.presentation_warnings
+    )
 def test_invalid_ranking_collection_generates_warning() -> None:
     response = _success_response()
     response["decision"][
@@ -898,6 +922,65 @@ def test_available_component_without_score_generates_warning() -> None:
         in warning.casefold()
         for warning in view.presentation_warnings
     )
+def test_ranking_component_score_out_of_range_is_rejected() -> None:
+    response = _success_response()
+    response["decision"][
+        "raw_components"
+    ]["ranking_components"][0][
+        "raw_score"
+    ] = 150.0
+    view = build_decision_view(
+        response
+    )
+    component = _ranking_component_by_name(
+        view,
+        "Calidad del negocio",
+    )
+    assert component.score is None
+    assert any(
+        "raw_score"
+        in warning.casefold()
+        and "fuera del rango"
+        in warning.casefold()
+        for warning in view.presentation_warnings
+    )
+def test_ranking_component_weight_out_of_range_is_rejected() -> None:
+    response = _success_response()
+    response["decision"][
+        "raw_components"
+    ]["ranking_components"][0][
+        "weight"
+    ] = 1.5
+    view = build_decision_view(
+        response
+    )
+    component = _ranking_component_by_name(
+        view,
+        "Calidad del negocio",
+    )
+    assert component.weight is None
+    assert any(
+        "weight"
+        in warning.casefold()
+        and "fuera del rango"
+        in warning.casefold()
+        for warning in view.presentation_warnings
+    )
+def test_incoherent_weighted_score_generates_warning() -> None:
+    response = _success_response()
+    response["decision"][
+        "raw_components"
+    ]["ranking_components"][0][
+        "weighted_score"
+    ] = 80.0
+    view = build_decision_view(
+        response
+    )
+    assert any(
+        "no es coherente"
+        in warning.casefold()
+        for warning in view.presentation_warnings
+    )
 @pytest.mark.parametrize(
     "invalid_number",
     [
@@ -913,7 +996,9 @@ def test_invalid_ranking_score_is_rendered_safely(
     invalid_number: Any,
 ) -> None:
     response = _success_response()
-    response["decision"]["ranking_score"] = invalid_number
+    response["decision"]["ranking_score"] = (
+        invalid_number
+    )
     view = build_decision_view(
         response
     )
@@ -956,10 +1041,6 @@ def test_invalid_ranking_coverage_is_rendered_safely(
     ("score", "expected"),
     [
         (
-            -10,
-            "0.0 / 100",
-        ),
-        (
             0,
             "0.0 / 100",
         ),
@@ -971,13 +1052,9 @@ def test_invalid_ranking_coverage_is_rendered_safely(
             100,
             "100.0 / 100",
         ),
-        (
-            130,
-            "100.0 / 100",
-        ),
     ],
 )
-def test_ranking_score_is_bounded_for_presentation(
+def test_valid_ranking_score_is_presented(
     score: float,
     expected: str,
 ) -> None:
@@ -992,6 +1069,63 @@ def test_ranking_score_is_bounded_for_presentation(
             "Ranking auxiliar",
         )
         == expected
+    )
+@pytest.mark.parametrize(
+    "score",
+    [
+        -10,
+        130,
+    ],
+)
+def test_out_of_range_ranking_score_is_rejected(
+    score: float,
+) -> None:
+    response = _success_response()
+    response["decision"]["ranking_score"] = score
+    view = build_decision_view(
+        response
+    )
+    assert (
+        _metric_value(
+            view,
+            "Ranking auxiliar",
+        )
+        == "No disponible"
+    )
+    assert any(
+        "entre 0 y 100"
+        in warning.casefold()
+        for warning in view.presentation_warnings
+    )
+@pytest.mark.parametrize(
+    "coverage",
+    [
+        -0.01,
+        1.01,
+        2.5,
+    ],
+)
+def test_out_of_range_ranking_coverage_is_rejected(
+    coverage: float,
+) -> None:
+    response = _success_response()
+    response["decision"][
+        "raw_components"
+    ]["ranking_coverage"] = coverage
+    view = build_decision_view(
+        response
+    )
+    assert (
+        _metric_value(
+            view,
+            "Cobertura del ranking",
+        )
+        == "No disponible"
+    )
+    assert any(
+        "rango permitido de 0 a 1"
+        in warning.casefold()
+        for warning in view.presentation_warnings
     )
 @pytest.mark.parametrize(
     ("source_count", "expected"),
@@ -1070,6 +1204,62 @@ def test_missing_metadata_uses_safe_defaults() -> None:
         )
         == "No disponible"
     )
+def test_invalid_metadata_mapping_generates_warning() -> None:
+    response = _success_response()
+    response["metadata"] = "invalid"
+    view = build_decision_view(
+        response
+    )
+    assert (
+        _metric_value(
+            view,
+            "Fuentes utilizadas",
+        )
+        == "No disponible"
+    )
+    assert any(
+        "campo metadata"
+        in warning.casefold()
+        for warning in view.presentation_warnings
+    )
+def test_invalid_raw_components_mapping_generates_warning() -> None:
+    response = _success_response()
+    response["decision"]["raw_components"] = (
+        "invalid"
+    )
+    view = build_decision_view(
+        response
+    )
+    assert view.ranking_components == []
+    assert any(
+        "campo raw_components"
+        in warning.casefold()
+        for warning in view.presentation_warnings
+    )
+def test_missing_schema_version_generates_warning() -> None:
+    response = _success_response()
+    response.pop(
+        "schema_version"
+    )
+    view = build_decision_view(
+        response
+    )
+    assert any(
+        "no informa de la versión"
+        in warning.casefold()
+        for warning in view.presentation_warnings
+    )
+def test_incompatible_schema_major_generates_warning() -> None:
+    response = _success_response()
+    response["schema_version"] = "2.0.0"
+    view = build_decision_view(
+        response
+    )
+    assert any(
+        "puede no ser compatible"
+        in warning.casefold()
+        for warning in view.presentation_warnings
+    )
 def test_presenter_does_not_share_success_raw_response_reference() -> None:
     response = _success_response()
     original = deepcopy(
@@ -1129,14 +1319,18 @@ def test_error_view_dictionary_is_json_serializable() -> None:
         str,
     )
     assert result["success"] is False
-    assert result["error_type"] == "INVALID_INPUT"
+    assert result["error_type"] == (
+        "INVALID_INPUT"
+    )
 def test_view_dictionary_is_independent_from_view_dataclass() -> None:
     response = _success_response()
     view = build_decision_view(
         response
     )
     result = view.to_dict()
-    result["raw_response"]["ticker"] = "CHANGED"
+    result["raw_response"]["ticker"] = (
+        "CHANGED"
+    )
     assert view.raw_response["ticker"] == "TEST"
 @pytest.mark.parametrize(
     ("action", "expected_tone"),
@@ -1270,7 +1464,9 @@ def test_confidence_tones(
     expected_tone: str,
 ) -> None:
     response = _success_response()
-    response["decision"]["confidence"] = confidence
+    response["decision"]["confidence"] = (
+        confidence
+    )
     view = build_decision_view(
         response
     )
@@ -1423,6 +1619,31 @@ def test_text_fields_are_trimmed() -> None:
         view.new_investor_badge.value
         == "COMPRAR"
     )
+def test_internal_whitespace_is_normalized() -> None:
+    response = _success_response()
+    response["company_name"] = (
+        "Test   Company\nInternational"
+    )
+    view = build_decision_view(
+        response
+    )
+    assert (
+        view.company_name
+        == "Test Company International"
+    )
+def test_bytes_are_not_presented_as_text() -> None:
+    response = _success_response()
+    response["decision"]["warnings"] = [
+        b"contenido binario",
+        "Advertencia válida.",
+    ]
+    view = build_decision_view(
+        response
+    )
+    assert view.warnings is not None
+    assert view.warnings.items == [
+        "Advertencia válida.",
+    ]
 def test_excessively_long_company_name_is_truncated() -> None:
     response = _success_response()
     response["company_name"] = "A" * 300
@@ -1454,7 +1675,9 @@ class _UncopyableValue:
         )
 def test_uncopyable_response_content_raises_presenter_error() -> None:
     response = _success_response()
-    response["uncopyable"] = _UncopyableValue()
+    response["uncopyable"] = (
+        _UncopyableValue()
+    )
     with pytest.raises(
         DecisionPresenterError,
         match="copia segura",
