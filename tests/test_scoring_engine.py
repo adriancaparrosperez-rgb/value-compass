@@ -268,10 +268,8 @@ def test_normalize_debt_to_equity(
     expected: float | None,
     has_warning: bool,
 ) -> None:
-    normalized, warning = (
-        _normalize_debt_to_equity(
-            value
-        )
+    normalized, warning = _normalize_debt_to_equity(
+        value
     )
     assert normalized == expected
     assert (warning is not None) is has_warning
@@ -490,9 +488,7 @@ def test_complete_snapshot_has_full_dimension_coverage() -> None:
     result = _score()
     assert all(
         coverage == 100.0
-        for coverage in (
-            result.dimension_coverage.values()
-        )
+        for coverage in result.dimension_coverage.values()
     )
     assert result.overall_coverage == 100.0
     assert result.missing_metrics == []
@@ -814,6 +810,54 @@ def test_analyst_target_warning_is_only_added_when_used() -> None:
     )
 def test_capital_allocation_proxy_warning_is_included() -> None:
     result = _score()
+    assert (
+        result.dimension_coverage[
+            "capital_allocation"
+        ]
+        > 0.0
+    )
+    assert any(
+        "asignación de capital"
+        in warning.casefold()
+        for warning in result.warnings
+    )
+def test_capital_allocation_warning_is_not_added_without_coverage() -> None:
+    snapshot = _complete_snapshot(
+        dividend_yield=None,
+        roe=None,
+    )
+    result = _score(
+        snapshot
+    )
+    assert (
+        result.dimension_coverage[
+            "capital_allocation"
+        ]
+        == 0.0
+    )
+    assert (
+        result.capital_allocation
+        == 50.0
+    )
+    assert not any(
+        "asignación de capital"
+        in warning.casefold()
+        for warning in result.warnings
+    )
+def test_partial_capital_allocation_coverage_keeps_warning() -> None:
+    snapshot = _complete_snapshot(
+        dividend_yield=None,
+        roe=0.22,
+    )
+    result = _score(
+        snapshot
+    )
+    assert (
+        result.dimension_coverage[
+            "capital_allocation"
+        ]
+        == 50.0
+    )
     assert any(
         "asignación de capital"
         in warning.casefold()
@@ -877,11 +921,8 @@ def test_score_snapshot_validates_input_types(
     thresholds: Any,
     message: str,
 ) -> None:
-    expected_exception = (
-        TypeError
-    )
     with pytest.raises(
-        expected_exception,
+        TypeError,
         match=message,
     ):
         score_snapshot(
@@ -947,8 +988,14 @@ def test_rationale_identifies_radar_classification() -> None:
         f"{result.recommendation}"
         in result.rationale
     )
-    assert "Fortalezas relativas" in result.rationale
-    assert "Áreas más débiles" in result.rationale
+    assert (
+        "Fortalezas relativas"
+        in result.rationale
+    )
+    assert (
+        "Áreas más débiles"
+        in result.rationale
+    )
 def test_low_dimension_coverage_is_mentioned_in_rationale() -> None:
     snapshot = _complete_snapshot(
         fcf_yield=None,
@@ -963,4 +1010,7 @@ def test_low_dimension_coverage_is_mentioned_in_rationale() -> None:
         "Cobertura limitada en"
         in result.rationale
     )
-    assert "valoración" in result.rationale.casefold()
+    assert (
+        "valoración"
+        in result.rationale.casefold()
+    )
