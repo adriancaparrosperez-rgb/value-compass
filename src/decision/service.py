@@ -6,6 +6,7 @@ from src.decision.engine import make_master_decision
 from src.decision.models import (
     MasterAnalysisInput,
     MasterDecisionResult,
+    SourceReference,
 )
 SERVICE_SCHEMA_VERSION = "1.0.0"
 SERVICE_NAME = "master-decision-service"
@@ -81,6 +82,72 @@ def _validate_sources(
         raise DecisionInputError(
             "Las fuentes deben proporcionarse como una lista."
         )
+    for index, source in enumerate(sources):
+        if not isinstance(
+            source,
+            SourceReference,
+        ):
+            raise DecisionInputError(
+                "Cada fuente debe ser una instancia "
+                f"de SourceReference. Elemento inválido: {index}."
+            )
+        if not isinstance(source.name, str):
+            raise DecisionInputError(
+                "El nombre de cada fuente debe ser texto."
+            )
+        if not source.name.strip():
+            raise DecisionInputError(
+                "El nombre de cada fuente no puede estar vacío."
+            )
+        if not isinstance(
+            source.source_type,
+            str,
+        ):
+            raise DecisionInputError(
+                "El tipo de cada fuente debe ser texto."
+            )
+        if not source.source_type.strip():
+            raise DecisionInputError(
+                "El tipo de cada fuente no puede estar vacío."
+            )
+        if (
+            source.url is not None
+            and not isinstance(source.url, str)
+        ):
+            raise DecisionInputError(
+                "La URL de cada fuente debe ser texto "
+                "o un valor nulo."
+            )
+        if (
+            source.published_at is not None
+            and not isinstance(
+                source.published_at,
+                str,
+            )
+        ):
+            raise DecisionInputError(
+                "La fecha de publicación de cada fuente "
+                "debe ser texto o un valor nulo."
+            )
+        if (
+            source.retrieved_at is not None
+            and not isinstance(
+                source.retrieved_at,
+                str,
+            )
+        ):
+            raise DecisionInputError(
+                "La fecha de consulta de cada fuente "
+                "debe ser texto o un valor nulo."
+            )
+        if not isinstance(
+            source.is_official,
+            bool,
+        ):
+            raise DecisionInputError(
+                "El indicador de fuente oficial "
+                "debe ser booleano."
+            )
 def _validate_analysis(
     analysis: Any,
 ) -> MasterAnalysisInput:
