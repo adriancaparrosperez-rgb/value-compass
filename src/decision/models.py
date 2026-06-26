@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 from src.decision.enums import (
     DataQualityStatus,
@@ -14,6 +15,30 @@ from src.decision.enums import (
     RiskLevel,
     ValuationStatus,
 )
+def _serialize_value(value: Any) -> Any:
+    """
+    Convierte recursivamente dataclasses ya transformadas con
+    asdict(), enums y estructuras anidadas en valores compatibles
+    con JSON y SQLite.
+    """
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {
+            key: _serialize_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _serialize_value(item)
+            for item in value
+        ]
+    if isinstance(value, tuple):
+        return [
+            _serialize_value(item)
+            for item in value
+        ]
+    return value
 @dataclass
 class SourceReference:
     name: str
@@ -24,7 +49,9 @@ class SourceReference:
     is_official: bool = False
 @dataclass
 class DataQualityAssessment:
-    status: DataQualityStatus = DataQualityStatus.INSUFFICIENT
+    status: DataQualityStatus = (
+        DataQualityStatus.INSUFFICIENT
+    )
     coverage_score: float = 0.0
     freshness_score: float = 0.0
     consistency_score: float = 0.0
@@ -38,8 +65,12 @@ class DataQualityAssessment:
     fundamentals_date: str | None = None
     source_count: int = 0
     official_source_count: int = 0
-    warnings: list[str] = field(default_factory=list)
-    blocking_issues: list[str] = field(default_factory=list)
+    warnings: list[str] = field(
+        default_factory=list
+    )
+    blocking_issues: list[str] = field(
+        default_factory=list
+    )
     @property
     def overall_score(self) -> float:
         score = (
@@ -49,7 +80,13 @@ class DataQualityAssessment:
             + 0.25 * self.source_quality_score
         )
         return round(
-            max(0.0, min(100.0, score)),
+            max(
+                0.0,
+                min(
+                    100.0,
+                    score,
+                ),
+            ),
             1,
         )
 @dataclass
@@ -73,8 +110,12 @@ class AccountingAssessment:
     earnings_quality_score: float | None = None
     accounting_quality_score: float | None = None
     uses_sbc_adjusted_fcf: bool = False
-    warnings: list[str] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
+    warnings: list[str] = field(
+        default_factory=list
+    )
+    notes: list[str] = field(
+        default_factory=list
+    )
 @dataclass
 class PerShareAssessment:
     diluted_shares: float | None = None
@@ -91,12 +132,20 @@ class PerShareAssessment:
     net_buybacks_after_sbc: float | None = None
     net_debt_per_share: float | None = None
     per_share_value_score: float | None = None
-    warnings: list[str] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
+    warnings: list[str] = field(
+        default_factory=list
+    )
+    notes: list[str] = field(
+        default_factory=list
+    )
 @dataclass
 class MoatAssessment:
-    strength: MoatStrength = MoatStrength.NOT_EVALUATED
-    trend: MoatTrend = MoatTrend.NOT_EVALUATED
+    strength: MoatStrength = (
+        MoatStrength.NOT_EVALUATED
+    )
+    trend: MoatTrend = (
+        MoatTrend.NOT_EVALUATED
+    )
     confidence: EvidenceConfidence = (
         EvidenceConfidence.NOT_EVALUABLE
     )
@@ -112,11 +161,18 @@ class MoatAssessment:
     disruption_risk_score: float | None = None
     preliminary_score: float | None = None
     reviewed_score: float | None = None
-    evidence: list[str] = field(default_factory=list)
-    threats: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
-    
+    evidence: list[str] = field(
+        default_factory=list
+    )
+    threats: list[str] = field(
+        default_factory=list
+    )
+    warnings: list[str] = field(
+        default_factory=list
+    )
+    notes: list[str] = field(
+        default_factory=list
+    )
 @dataclass
 class BusinessAssessment:
     sector: str | None = None
@@ -136,8 +192,12 @@ class BusinessAssessment:
     supplier_concentration_risk: float | None = None
     platform_dependency_risk: float | None = None
     regulatory_risk: float | None = None
-    warnings: list[str] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
+    warnings: list[str] = field(
+        default_factory=list
+    )
+    notes: list[str] = field(
+        default_factory=list
+    )
 @dataclass
 class ValuationScenario:
     name: str
@@ -166,8 +226,12 @@ class ValuationAssessment:
     status: ValuationStatus = (
         ValuationStatus.NOT_EVALUATED
     )
-    warnings: list[str] = field(default_factory=list)
-    notes: list[str] = field(default_factory=list)
+    warnings: list[str] = field(
+        default_factory=list
+    )
+    notes: list[str] = field(
+        default_factory=list
+    )
 @dataclass
 class GateResult:
     code: str
@@ -184,7 +248,9 @@ class RadarAssessment:
     )
     reason: str = ""
     requires_master_analysis: bool = True
-    warnings: list[str] = field(default_factory=list)
+    warnings: list[str] = field(
+        default_factory=list
+    )
 @dataclass
 class MasterAnalysisInput:
     ticker: str
@@ -216,6 +282,10 @@ class MasterAnalysisInput:
             timezone.utc
         ).isoformat()
     )
+    def to_dict(self) -> dict[str, Any]:
+        return _serialize_value(
+            asdict(self)
+        )
 @dataclass
 class MasterDecisionResult:
     ticker: str
@@ -256,4 +326,6 @@ class MasterDecisionResult:
         ).isoformat()
     )
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return _serialize_value(
+            asdict(self)
+        )
