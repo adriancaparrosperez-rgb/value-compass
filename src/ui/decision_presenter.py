@@ -1,16 +1,87 @@
 from __future__ import annotations
 import math
+import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
-PRESENTER_SCHEMA_VERSION = "1.1.0"
+PRESENTER_SCHEMA_VERSION = "1.2.0"
+SUPPORTED_SERVICE_SCHEMA_MAJOR = 1
+DEFAULT_TEXT_MAXIMUM_LENGTH = 2_000
+MAXIMUM_TICKER_LENGTH = 30
+MAXIMUM_COMPANY_NAME_LENGTH = 250
+MAXIMUM_MODEL_VERSION_LENGTH = 50
+MAXIMUM_SCHEMA_VERSION_LENGTH = 50
+MAXIMUM_SERVICE_NAME_LENGTH = 100
+MAXIMUM_GATE_CODE_LENGTH = 100
+MAXIMUM_GATE_SEVERITY_LENGTH = 50
+MAXIMUM_COMPONENT_NAME_LENGTH = 150
 Tone = Literal[
     "positive",
     "warning",
     "negative",
     "neutral",
 ]
+VALID_TONES = frozenset(
+    {
+        "positive",
+        "warning",
+        "negative",
+        "neutral",
+    }
+)
+NEW_INVESTOR_TONES: dict[str, Tone] = {
+    "compra clara": "positive",
+    "comprar": "positive",
+    "compra parcial": "warning",
+    "esperar": "warning",
+    "requiere análisis maestro": "warning",
+    "descartar": "negative",
+    "datos no fiables": "negative",
+}
+HOLDER_TONES: dict[str, Tone] = {
+    "aumentar": "positive",
+    "mantener": "neutral",
+    "revisar tesis": "warning",
+    "reducir": "warning",
+    "salir": "negative",
+    "datos no fiables": "negative",
+}
+CONFIDENCE_TONES: dict[str, Tone] = {
+    "alta": "positive",
+    "media": "neutral",
+    "baja": "warning",
+    "no evaluable": "negative",
+}
+RISK_TONES: dict[str, Tone] = {
+    "bajo": "positive",
+    "medio": "warning",
+    "alto": "negative",
+    "crítico": "negative",
+    "no evaluado": "neutral",
+}
+VALUATION_TONES: dict[str, Tone] = {
+    "infravalorada": "positive",
+    "muy atractiva": "positive",
+    "atractiva": "positive",
+    "valoración razonable": "neutral",
+    "razonable": "neutral",
+    "exigente": "warning",
+    "sobrevalorada": "warning",
+    "muy exigente": "warning",
+    "no evaluada": "neutral",
+}
+MOAT_TONES: dict[str, Tone] = {
+    "fuerte": "positive",
+    "moderado": "neutral",
+    "débil": "negative",
+    "no evaluado": "neutral",
+}
+GATE_SEVERITY_ORDER = {
+    "bloqueante": 0,
+    "advertencia": 1,
+    "informativo": 2,
+}
 class DecisionPresenterError(ValueError):
     """Error controlado al preparar datos para la interfaz."""
 @dataclass(frozen=True)
@@ -94,7 +165,10 @@ def _ensure_mapping(
     value: Any,
     field_name: str,
 ) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
+    if not isinstance(
+        value,
+        Mapping,
+    ):
         raise DecisionPresenterError(
             f"{field_name} debe ser un diccionario."
         )
@@ -102,8 +176,28 @@ def _ensure_mapping(
 def _optional_mapping(
     value: Any,
 ) -> Mapping[str, Any]:
-    if isinstance(value, Mapping):
+    if isinstance(
+        value,
+        Mapping,
+    ):
         return value
+    return {}
+def _mapping_with_warning(
+    value: Any,
+    *,
+    field_name: str,
+    presentation_warnings: list[str],
+) -> Mapping[str, Any]:
+    if isinstance(
+        value,
+        Mapping,
+    ):
+        return value
+    if value is not None:
+        presentation_warnings.append(
+            f"El campo {field_name} no tiene "
+            "un formato válido."
+        )
     return {}
 def _safe_copy_mapping(
     value: Mapping[str, Any],
@@ -118,20 +212,65 @@ def _safe_copy_mapping(
             "de la respuesta."
         ) from error
     return copied_value
+def _validate_maximum_length(
+    maximum_length: int,
+) -> None:
+    if (
+        isinstance(
+            maximum_length,
+            bool,
+        )
+        or not isinstance(
+            maximum_length,
+            int,
+        )
+        or maximum_length < 1
+    ):
+        raise DecisionPresenterError(
+            "maximum_length debe ser un entero "
+            "mayor que cero."
+        )
+def _normalize_whitespace(
+    value: str,
+) -> str:
+    return re.sub(
+        r"\s+",
+        " ",
+        value,
+    ).strip()
 def _text(
     value: Any,
     default: str = "",
-    maximum_length: int = 2_000,
+    maximum_length: int = (
+        DEFAULT_TEXT_MAXIMUM_LENGTH
+    ),
 ) -> str:
+    _validate_maximum_length(
+        maximum_length
+    )
     if value is None:
         return default
-    if isinstance(value, str):
-        normalized = value.strip()
+    if isinstance(
+        value,
+        bytes,
+    ):
+        return default
+    if isinstance(
+        value,
+        str,
+    ):
+        normalized = _normalize_whitespace(
+            value
+        )
     else:
-        normalized = str(value).strip()
+        normalized = _normalize_whitespace(
+            str(value)
+        )
     if not normalized:
         return default
     if len(normalized) > maximum_length:
+        if maximum_length == 1:
+            return "…"
         return (
             normalized[: maximum_length - 1]
             + "…"
@@ -139,7 +278,9 @@ def _text(
     return normalized
 def _optional_text(
     value: Any,
-    maximum_length: int = 2_000,
+    maximum_length: int = (
+        DEFAULT_TEXT_MAXIMUM_LENGTH
+    ),
 ) -> str | None:
     normalized = _text(
         value,
@@ -150,21 +291,56 @@ def _boolean(
     value: Any,
     default: bool = False,
 ) -> bool:
-    if isinstance(value, bool):
+    if isinstance(
+        value,
+        bool,
+    ):
         return value
     return default
 def _number(
     value: Any,
 ) -> float | None:
-    if value is None or isinstance(value, bool):
+    if (
+        value is None
+        or isinstance(
+            value,
+            bool,
+        )
+    ):
         return None
     try:
-        result = float(value)
-    except (TypeError, ValueError):
+        result = float(
+            value
+        )
+    except (
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
         return None
-    if not math.isfinite(result):
+    if not math.isfinite(
+        result
+    ):
         return None
     return result
+def _number_in_range(
+    value: Any,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float | None:
+    numeric_value = _number(
+        value
+    )
+    if numeric_value is None:
+        return None
+    if not (
+        minimum
+        <= numeric_value
+        <= maximum
+    ):
+        return None
+    return numeric_value
 def _integer(
     value: Any,
 ) -> int | None:
@@ -178,35 +354,25 @@ def _integer(
     return int(
         numeric_value
     )
-def _string_list(
-    value: Any,
+def _deduplicate_strings(
+    values: Sequence[Any],
 ) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(
-        value,
-        (str, bytes),
-    ):
-        normalized = _text(
-            value
-        )
-        return [
-            normalized
-        ] if normalized else []
-    if not isinstance(
-        value,
-        Sequence,
-    ):
-        return []
     result: list[str] = []
     seen: set[str] = set()
-    for item in value:
+    for item in values:
+        if isinstance(
+            item,
+            bytes,
+        ):
+            continue
         normalized = _text(
             item
         )
         if not normalized:
             continue
-        comparison_key = normalized.casefold()
+        comparison_key = (
+            normalized.casefold()
+        )
         if comparison_key in seen:
             continue
         seen.add(
@@ -216,12 +382,44 @@ def _string_list(
             normalized
         )
     return result
+def _string_list(
+    value: Any,
+) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(
+        value,
+        bytes,
+    ):
+        return []
+    if isinstance(
+        value,
+        str,
+    ):
+        normalized = _text(
+            value
+        )
+        return (
+            [normalized]
+            if normalized
+            else []
+        )
+    if not isinstance(
+        value,
+        Sequence,
+    ):
+        return []
+    return _deduplicate_strings(
+        value
+    )
 def _format_ratio_as_percentage(
     value: Any,
     decimals: int = 0,
 ) -> str:
-    numeric_value = _number(
-        value
+    numeric_value = _number_in_range(
+        value,
+        minimum=0.0,
+        maximum=1.0,
     )
     if numeric_value is None:
         return "No disponible"
@@ -244,20 +442,15 @@ def _format_score(
     value: Any,
     decimals: int = 1,
 ) -> str:
-    numeric_value = _number(
-        value
+    numeric_value = _number_in_range(
+        value,
+        minimum=0.0,
+        maximum=100.0,
     )
     if numeric_value is None:
         return "No disponible"
-    bounded_value = max(
-        0.0,
-        min(
-            100.0,
-            numeric_value,
-        ),
-    )
     return (
-        f"{bounded_value:.{decimals}f} / 100"
+        f"{numeric_value:.{decimals}f} / 100"
     )
 def _normalize_status(
     value: Any,
@@ -265,130 +458,79 @@ def _normalize_status(
     return _text(
         value
     ).casefold()
+def _tone_from_mapping(
+    value: Any,
+    mapping: Mapping[str, Tone],
+) -> Tone:
+    normalized = _normalize_status(
+        value
+    )
+    return mapping.get(
+        normalized,
+        "neutral",
+    )
 def _tone_for_new_investor_action(
     action: str,
 ) -> Tone:
-    normalized = _normalize_status(
-        action
+    return _tone_from_mapping(
+        action,
+        NEW_INVESTOR_TONES,
     )
-    if normalized in {
-        "compra clara",
-        "comprar",
-    }:
-        return "positive"
-    if normalized in {
-        "compra parcial",
-        "esperar",
-        "requiere análisis maestro",
-    }:
-        return "warning"
-    if normalized in {
-        "descartar",
-        "datos no fiables",
-    }:
-        return "negative"
-    return "neutral"
 def _tone_for_holder_action(
     action: str,
 ) -> Tone:
-    normalized = _normalize_status(
-        action
+    return _tone_from_mapping(
+        action,
+        HOLDER_TONES,
     )
-    if normalized == "aumentar":
-        return "positive"
-    if normalized == "mantener":
-        return "neutral"
-    if normalized in {
-        "revisar tesis",
-        "reducir",
-    }:
-        return "warning"
-    if normalized in {
-        "salir",
-        "datos no fiables",
-    }:
-        return "negative"
-    return "neutral"
 def _tone_for_confidence(
     confidence: str,
 ) -> Tone:
-    normalized = _normalize_status(
-        confidence
+    return _tone_from_mapping(
+        confidence,
+        CONFIDENCE_TONES,
     )
-    if normalized == "alta":
-        return "positive"
-    if normalized == "media":
-        return "neutral"
-    if normalized == "baja":
-        return "warning"
-    if normalized == "no evaluable":
-        return "negative"
-    return "neutral"
 def _tone_for_risk(
     risk: str,
 ) -> Tone:
-    normalized = _normalize_status(
-        risk
+    return _tone_from_mapping(
+        risk,
+        RISK_TONES,
     )
-    if normalized == "bajo":
-        return "positive"
-    if normalized == "medio":
-        return "warning"
-    if normalized in {
-        "alto",
-        "crítico",
-    }:
-        return "negative"
-    return "neutral"
 def _tone_for_valuation(
     valuation: str,
 ) -> Tone:
-    normalized = _normalize_status(
-        valuation
+    return _tone_from_mapping(
+        valuation,
+        VALUATION_TONES,
     )
-    if normalized in {
-        "infravalorada",
-        "muy atractiva",
-        "atractiva",
-    }:
-        return "positive"
-    if normalized in {
-        "valoración razonable",
-        "razonable",
-    }:
-        return "neutral"
-    if normalized in {
-        "exigente",
-        "sobrevalorada",
-        "muy exigente",
-    }:
-        return "warning"
-    return "neutral"
 def _tone_for_moat(
     moat: str,
 ) -> Tone:
-    normalized = _normalize_status(
-        moat
+    return _tone_from_mapping(
+        moat,
+        MOAT_TONES,
     )
-    if normalized == "fuerte":
-        return "positive"
-    if normalized == "moderado":
-        return "neutral"
-    if normalized == "débil":
-        return "negative"
-    return "neutral"
 def _tone_for_gate(
     passed: bool,
     severity: str,
 ) -> Tone:
     if passed:
         return "positive"
-    normalized_severity = _normalize_status(
-        severity
+    normalized_severity = (
+        _normalize_status(
+            severity
+        )
     )
-    if normalized_severity == "bloqueante":
+    if (
+        normalized_severity
+        == "bloqueante"
+    ):
         return "negative"
-    if normalized_severity == "advertencia":
+    if (
+        normalized_severity
+        == "advertencia"
+    ):
         return "warning"
     return "neutral"
 def _badge(
@@ -397,14 +539,25 @@ def _badge(
     tone: Tone,
     help_text: str | None = None,
 ) -> DecisionBadge:
+    normalized_tone: Tone = (
+        tone
+        if tone in VALID_TONES
+        else "neutral"
+    )
     return DecisionBadge(
-        label=label,
+        label=_text(
+            label,
+            "Sin etiqueta",
+            maximum_length=100,
+        ),
         value=_text(
             value,
             "No disponible",
         ),
-        tone=tone,
-        help_text=help_text,
+        tone=normalized_tone,
+        help_text=_optional_text(
+            help_text
+        ),
     )
 def _section(
     title: str,
@@ -412,42 +565,127 @@ def _section(
     empty_message: str,
 ) -> DecisionSection:
     return DecisionSection(
-        title=title,
+        title=_text(
+            title,
+            "Sección",
+            maximum_length=150,
+        ),
         items=_string_list(
             value
         ),
-        empty_message=empty_message,
+        empty_message=_optional_text(
+            empty_message
+        ),
     )
+def _normalize_ticker_for_comparison(
+    value: Any,
+) -> str | None:
+    ticker = _optional_text(
+        value,
+        maximum_length=(
+            MAXIMUM_TICKER_LENGTH
+        ),
+    )
+    if ticker is None:
+        return None
+    return ticker.upper()
+def _parse_schema_major(
+    value: Any,
+) -> int | None:
+    normalized_version = (
+        _optional_text(
+            value,
+            maximum_length=(
+                MAXIMUM_SCHEMA_VERSION_LENGTH
+            ),
+        )
+    )
+    if normalized_version is None:
+        return None
+    major_part = (
+        normalized_version
+        .split(
+            ".",
+            maxsplit=1,
+        )[0]
+        .strip()
+    )
+    if not major_part.isdigit():
+        return None
+    return int(
+        major_part
+    )
+def _collect_schema_warnings(
+    response: Mapping[str, Any],
+) -> list[str]:
+    warnings: list[str] = []
+    schema_value = response.get(
+        "schema_version"
+    )
+    schema_version = _optional_text(
+        schema_value,
+        maximum_length=(
+            MAXIMUM_SCHEMA_VERSION_LENGTH
+        ),
+    )
+    if schema_version is None:
+        warnings.append(
+            "La respuesta no informa de la versión "
+            "del esquema del servicio."
+        )
+        return warnings
+    schema_major = _parse_schema_major(
+        schema_version
+    )
+    if schema_major is None:
+        warnings.append(
+            "La versión del esquema del servicio "
+            "no tiene un formato reconocible."
+        )
+    elif (
+        schema_major
+        != SUPPORTED_SERVICE_SCHEMA_MAJOR
+    ):
+        warnings.append(
+            "La versión principal del esquema del servicio "
+            "puede no ser compatible con el presenter."
+        )
+    return warnings
 def _gate_sort_key(
     gate: GateView,
 ) -> tuple[int, int, str]:
-    if gate.passed:
-        failure_order = 1
-    else:
-        failure_order = 0
-    severity_order = {
-        "bloqueante": 0,
-        "advertencia": 1,
-        "informativo": 2,
-    }.get(
-        gate.severity.casefold(),
-        3,
+    failure_order = (
+        1
+        if gate.passed
+        else 0
+    )
+    severity_order = (
+        GATE_SEVERITY_ORDER.get(
+            gate.severity.casefold(),
+            3,
+        )
     )
     return (
         failure_order,
         severity_order,
-        gate.code,
+        gate.code.casefold(),
     )
 def _build_gate_views(
     value: Any,
     presentation_warnings: list[str],
 ) -> list[GateView]:
-    if not isinstance(
-        value,
-        Sequence,
-    ) or isinstance(
-        value,
-        (str, bytes),
+    if (
+        not isinstance(
+            value,
+            Sequence,
+        )
+        or isinstance(
+            value,
+            (
+                str,
+                bytes,
+            ),
+        )
     ):
         if value is not None:
             presentation_warnings.append(
@@ -456,7 +694,9 @@ def _build_gate_views(
         return []
     gates: list[GateView] = []
     seen_codes: set[str] = set()
-    for index, item in enumerate(value):
+    for index, item in enumerate(
+        value
+    ):
         if not isinstance(
             item,
             Mapping,
@@ -466,12 +706,35 @@ def _build_gate_views(
                 f"en la posición {index}."
             )
             continue
-        code = _text(
-            item.get("code"),
-            f"UNKNOWN_GATE_{index}",
-            maximum_length=100,
+        passed_value = item.get(
+            "passed"
         )
-        comparison_key = code.casefold()
+        if not isinstance(
+            passed_value,
+            bool,
+        ):
+            presentation_warnings.append(
+                "Se ignoró un gate sin un valor booleano "
+                f"válido en passed en la posición {index}."
+            )
+            continue
+        code = _optional_text(
+            item.get(
+                "code"
+            ),
+            maximum_length=(
+                MAXIMUM_GATE_CODE_LENGTH
+            ),
+        )
+        if code is None:
+            presentation_warnings.append(
+                "Se ignoró un gate sin código válido "
+                f"en la posición {index}."
+            )
+            continue
+        comparison_key = (
+            code.casefold()
+        )
         if comparison_key in seen_codes:
             presentation_warnings.append(
                 f"Se ignoró el gate duplicado {code}."
@@ -481,25 +744,28 @@ def _build_gate_views(
             comparison_key
         )
         message = _text(
-            item.get("message"),
+            item.get(
+                "message"
+            ),
             "Sin detalle.",
         )
         severity = _text(
-            item.get("severity"),
+            item.get(
+                "severity"
+            ),
             "INFORMATIVO",
-            maximum_length=50,
-        )
-        passed = _boolean(
-            item.get("passed")
+            maximum_length=(
+                MAXIMUM_GATE_SEVERITY_LENGTH
+            ),
         )
         gates.append(
             GateView(
                 code=code,
                 message=message,
                 severity=severity,
-                passed=passed,
+                passed=passed_value,
                 tone=_tone_for_gate(
-                    passed=passed,
+                    passed=passed_value,
                     severity=severity,
                 ),
             )
@@ -508,6 +774,37 @@ def _build_gate_views(
         gates,
         key=_gate_sort_key,
     )
+def _validate_ranking_component_number(
+    value: Any,
+    *,
+    minimum: float,
+    maximum: float,
+    field_label: str,
+    component_name: str,
+    presentation_warnings: list[str],
+) -> float | None:
+    if value is None:
+        return None
+    numeric_value = _number(
+        value
+    )
+    if numeric_value is None:
+        presentation_warnings.append(
+            f"El campo {field_label} del componente "
+            f"{component_name} no contiene un número válido."
+        )
+        return None
+    if not (
+        minimum
+        <= numeric_value
+        <= maximum
+    ):
+        presentation_warnings.append(
+            f"El campo {field_label} del componente "
+            f"{component_name} está fuera del rango permitido."
+        )
+        return None
+    return numeric_value
 def _build_ranking_component_views(
     raw_components: Mapping[str, Any],
     presentation_warnings: list[str],
@@ -515,12 +812,18 @@ def _build_ranking_component_views(
     value = raw_components.get(
         "ranking_components"
     )
-    if not isinstance(
-        value,
-        Sequence,
-    ) or isinstance(
-        value,
-        (str, bytes),
+    if (
+        not isinstance(
+            value,
+            Sequence,
+        )
+        or isinstance(
+            value,
+            (
+                str,
+                bytes,
+            ),
+        )
     ):
         if value is not None:
             presentation_warnings.append(
@@ -528,9 +831,13 @@ def _build_ranking_component_views(
                 "un formato válido."
             )
         return []
-    components: list[RankingComponentView] = []
+    components: list[
+        RankingComponentView
+    ] = []
     seen_names: set[str] = set()
-    for index, item in enumerate(value):
+    for index, item in enumerate(
+        value
+    ):
         if not isinstance(
             item,
             Mapping,
@@ -541,11 +848,17 @@ def _build_ranking_component_views(
             )
             continue
         name = _text(
-            item.get("name"),
+            item.get(
+                "name"
+            ),
             f"Componente {index + 1}",
-            maximum_length=150,
+            maximum_length=(
+                MAXIMUM_COMPONENT_NAME_LENGTH
+            ),
         )
-        comparison_key = name.casefold()
+        comparison_key = (
+            name.casefold()
+        )
         if comparison_key in seen_names:
             presentation_warnings.append(
                 "Se ignoró el componente duplicado "
@@ -555,23 +868,114 @@ def _build_ranking_component_views(
         seen_names.add(
             comparison_key
         )
-        score = _number(
-            item.get("raw_score")
+        available_value = item.get(
+            "available"
         )
-        weight = _number(
-            item.get("weight")
+        if not isinstance(
+            available_value,
+            bool,
+        ):
+            presentation_warnings.append(
+                "El componente "
+                f"{name} no contiene un indicador available "
+                "booleano válido; se considera no disponible."
+            )
+            available = False
+        else:
+            available = (
+                available_value
+            )
+        score = (
+            _validate_ranking_component_number(
+                item.get(
+                    "raw_score"
+                ),
+                minimum=0.0,
+                maximum=100.0,
+                field_label="raw_score",
+                component_name=name,
+                presentation_warnings=(
+                    presentation_warnings
+                ),
+            )
         )
-        weighted_score = _number(
-            item.get("weighted_score")
+        weight = (
+            _validate_ranking_component_number(
+                item.get(
+                    "weight"
+                ),
+                minimum=0.0,
+                maximum=1.0,
+                field_label="weight",
+                component_name=name,
+                presentation_warnings=(
+                    presentation_warnings
+                ),
+            )
         )
-        available = _boolean(
-            item.get("available")
+        weighted_score = (
+            _validate_ranking_component_number(
+                item.get(
+                    "weighted_score"
+                ),
+                minimum=0.0,
+                maximum=100.0,
+                field_label="weighted_score",
+                component_name=name,
+                presentation_warnings=(
+                    presentation_warnings
+                ),
+            )
         )
-        if available and score is None:
+        if (
+            available
+            and score is None
+        ):
             presentation_warnings.append(
                 f"El componente {name} figura disponible "
                 "pero no contiene una puntuación válida."
             )
+        if (
+            not available
+            and any(
+                candidate is not None
+                for candidate in (
+                    score,
+                    weight,
+                    weighted_score,
+                )
+            )
+        ):
+            presentation_warnings.append(
+                f"El componente {name} figura como no "
+                "disponible pero contiene valores numéricos."
+            )
+        if (
+            score is not None
+            and weight is not None
+            and weighted_score is not None
+        ):
+            expected_weighted_score = (
+                score * weight
+            )
+            tolerance = max(
+                0.1,
+                abs(
+                    expected_weighted_score
+                )
+                * 0.01,
+            )
+            if (
+                abs(
+                    weighted_score
+                    - expected_weighted_score
+                )
+                > tolerance
+            ):
+                presentation_warnings.append(
+                    f"El weighted_score del componente {name} "
+                    "no es coherente con raw_score y weight."
+                )
         components.append(
             RankingComponentView(
                 name=name,
@@ -580,7 +984,9 @@ def _build_ranking_component_views(
                 weighted_score=weighted_score,
                 available=available,
                 reason=_optional_text(
-                    item.get("reason")
+                    item.get(
+                        "reason"
+                    )
                 ),
             )
         )
@@ -598,7 +1004,9 @@ def _build_subtitle(
     decision: Mapping[str, Any],
 ) -> str:
     quality = _text(
-        decision.get("company_quality"),
+        decision.get(
+            "company_quality"
+        ),
         "NO EVALUABLE",
         maximum_length=50,
     )
@@ -606,23 +1014,99 @@ def _build_subtitle(
         "Resultado del análisis maestro · "
         f"Calidad empresarial: {quality}"
     )
+def _validated_ranking_coverage(
+    raw_components: Mapping[str, Any],
+    presentation_warnings: list[str],
+) -> float | None:
+    raw_value = raw_components.get(
+        "ranking_coverage"
+    )
+    if raw_value is None:
+        return None
+    numeric_value = _number(
+        raw_value
+    )
+    if numeric_value is None:
+        presentation_warnings.append(
+            "La cobertura del ranking no contiene "
+            "un valor numérico válido."
+        )
+        return None
+    if not (
+        0.0
+        <= numeric_value
+        <= 1.0
+    ):
+        presentation_warnings.append(
+            "La cobertura del ranking está fuera "
+            "del rango permitido de 0 a 1."
+        )
+        return None
+    return numeric_value
 def _build_metrics(
     response: Mapping[str, Any],
     decision: Mapping[str, Any],
     raw_components: Mapping[str, Any],
     gates: list[GateView],
+    presentation_warnings: list[str],
 ) -> list[DecisionMetric]:
-    metadata = _optional_mapping(
-        response.get("metadata")
+    metadata = _mapping_with_warning(
+        response.get(
+            "metadata"
+        ),
+        field_name="metadata",
+        presentation_warnings=(
+            presentation_warnings
+        ),
+    )
+    source_count_raw = metadata.get(
+        "source_count"
     )
     source_count = _integer(
-        metadata.get("source_count")
+        source_count_raw
     )
+    if (
+        source_count_raw is not None
+        and (
+            source_count is None
+            or source_count < 0
+        )
+    ):
+        presentation_warnings.append(
+            "El número de fuentes no contiene "
+            "un entero no negativo válido."
+        )
     source_count_text = (
-        str(source_count)
-        if source_count is not None
-        and source_count >= 0
+        str(
+            source_count
+        )
+        if (
+            source_count is not None
+            and source_count >= 0
+        )
         else "No disponible"
+    )
+    ranking_score_raw = decision.get(
+        "ranking_score"
+    )
+    ranking_score = _number_in_range(
+        ranking_score_raw,
+        minimum=0.0,
+        maximum=100.0,
+    )
+    if (
+        ranking_score_raw is not None
+        and ranking_score is None
+    ):
+        presentation_warnings.append(
+            "El ranking auxiliar no contiene una "
+            "puntuación válida entre 0 y 100."
+        )
+    ranking_coverage = (
+        _validated_ranking_coverage(
+            raw_components,
+            presentation_warnings,
+        )
     )
     failed_gates = sum(
         not gate.passed
@@ -640,9 +1124,7 @@ def _build_metrics(
         DecisionMetric(
             label="Ranking auxiliar",
             value=_format_score(
-                decision.get(
-                    "ranking_score"
-                )
+                ranking_score
             ),
             help_text=(
                 "Ordena oportunidades, pero no sustituye "
@@ -652,9 +1134,7 @@ def _build_metrics(
         DecisionMetric(
             label="Cobertura del ranking",
             value=_format_ratio_as_percentage(
-                raw_components.get(
-                    "ranking_coverage"
-                )
+                ranking_coverage
             ),
             help_text=(
                 "Proporción de dimensiones disponibles "
@@ -704,7 +1184,9 @@ def _build_metrics(
                     "model_version"
                 ),
                 "No disponible",
-                maximum_length=50,
+                maximum_length=(
+                    MAXIMUM_MODEL_VERSION_LENGTH
+                ),
             ),
         ),
     ]
@@ -713,18 +1195,30 @@ def _collect_integrity_warnings(
     decision: Mapping[str, Any],
 ) -> list[str]:
     warnings: list[str] = []
-    response_ticker = _optional_text(
-        response.get("ticker"),
-        maximum_length=30,
+    warnings.extend(
+        _collect_schema_warnings(
+            response
+        )
     )
-    decision_ticker = _optional_text(
-        decision.get("ticker"),
-        maximum_length=30,
+    response_ticker = (
+        _normalize_ticker_for_comparison(
+            response.get(
+                "ticker"
+            )
+        )
+    )
+    decision_ticker = (
+        _normalize_ticker_for_comparison(
+            decision.get(
+                "ticker"
+            )
+        )
     )
     if (
         response_ticker
         and decision_ticker
-        and response_ticker != decision_ticker
+        and response_ticker
+        != decision_ticker
     ):
         warnings.append(
             "El ticker de la respuesta no coincide con "
@@ -757,43 +1251,85 @@ def _collect_integrity_warnings(
         required_decision_fields.items()
     ):
         if not _optional_text(
-            decision.get(field_name)
+            decision.get(
+                field_name
+            )
         ):
             warnings.append(
                 warning
             )
-    return warnings
+    return _deduplicate_strings(
+        warnings
+    )
 def _build_error_view(
     response: Mapping[str, Any],
 ) -> DecisionView:
     error = _optional_mapping(
-        response.get("error")
+        response.get(
+            "error"
+        )
     )
     error_type = _text(
-        error.get("type"),
+        error.get(
+            "type"
+        ),
         "UNKNOWN_ERROR",
         maximum_length=100,
     )
     error_message = _text(
-        error.get("message"),
+        error.get(
+            "message"
+        ),
         (
             "No se pudo preparar el resultado "
             "del análisis."
         ),
     )
+    presentation_warnings = (
+        _collect_schema_warnings(
+            response
+        )
+    )
+    if not isinstance(
+        response.get(
+            "error"
+        ),
+        Mapping,
+    ):
+        presentation_warnings.append(
+            "La respuesta de error no contiene "
+            "un campo error válido."
+        )
     return DecisionView(
         success=False,
         schema_version=PRESENTER_SCHEMA_VERSION,
-        service_schema_version=_optional_text(
-            response.get("schema_version"),
-            maximum_length=50,
+        service_schema_version=(
+            _optional_text(
+                response.get(
+                    "schema_version"
+                ),
+                maximum_length=(
+                    MAXIMUM_SCHEMA_VERSION_LENGTH
+                ),
+            )
         ),
         service_name=_optional_text(
-            response.get("service"),
-            maximum_length=100,
+            response.get(
+                "service"
+            ),
+            maximum_length=(
+                MAXIMUM_SERVICE_NAME_LENGTH
+            ),
         ),
-        title="No se pudo completar el análisis",
+        title=(
+            "No se pudo completar el análisis"
+        ),
         subtitle=error_message,
+        presentation_warnings=(
+            _deduplicate_strings(
+                presentation_warnings
+            )
+        ),
         error_type=error_type,
         error_message=error_message,
         raw_response=_safe_copy_mapping(
@@ -807,10 +1343,14 @@ def build_decision_view(
     Convierte la respuesta del servicio en un modelo estable
     de presentación.
     No depende de Streamlit y no contiene lógica financiera.
+    Tolera campos opcionales dañados, pero registra las
+    anomalías en presentation_warnings.
     """
-    validated_response = _ensure_mapping(
-        response,
-        "La respuesta del servicio",
+    validated_response = (
+        _ensure_mapping(
+            response,
+            "La respuesta del servicio",
+        )
     )
     success = validated_response.get(
         "success"
@@ -840,12 +1380,20 @@ def build_decision_view(
         )
     )
     response_ticker = _optional_text(
-        validated_response.get("ticker"),
-        maximum_length=30,
+        validated_response.get(
+            "ticker"
+        ),
+        maximum_length=(
+            MAXIMUM_TICKER_LENGTH
+        ),
     )
     decision_ticker = _optional_text(
-        decision.get("ticker"),
-        maximum_length=30,
+        decision.get(
+            "ticker"
+        ),
+        maximum_length=(
+            MAXIMUM_TICKER_LENGTH
+        ),
     )
     ticker = (
         response_ticker
@@ -856,7 +1404,9 @@ def build_decision_view(
         validated_response.get(
             "company_name"
         ),
-        maximum_length=250,
+        maximum_length=(
+            MAXIMUM_COMPANY_NAME_LENGTH
+        ),
     )
     new_investor_action = _text(
         decision.get(
@@ -873,12 +1423,16 @@ def build_decision_view(
         maximum_length=100,
     )
     confidence = _text(
-        decision.get("confidence"),
+        decision.get(
+            "confidence"
+        ),
         "No evaluable",
         maximum_length=50,
     )
     risk_level = _text(
-        decision.get("risk_level"),
+        decision.get(
+            "risk_level"
+        ),
         "No evaluado",
         maximum_length=50,
     )
@@ -903,13 +1457,24 @@ def build_decision_view(
         "No evaluado",
         maximum_length=100,
     )
-    raw_components = _optional_mapping(
+    raw_components_value = (
         decision.get(
             "raw_components"
         )
     )
+    raw_components = (
+        _mapping_with_warning(
+            raw_components_value,
+            field_name="raw_components",
+            presentation_warnings=(
+                presentation_warnings
+            ),
+        )
+    )
     gates = _build_gate_views(
-        decision.get("gates"),
+        decision.get(
+            "gates"
+        ),
         presentation_warnings,
     )
     ranking_components = (
@@ -918,23 +1483,38 @@ def build_decision_view(
             presentation_warnings,
         )
     )
+    metrics = _build_metrics(
+        response=validated_response,
+        decision=decision,
+        raw_components=raw_components,
+        gates=gates,
+        presentation_warnings=(
+            presentation_warnings
+        ),
+    )
     moat_value = (
         f"{moat_strength} · {moat_trend}"
     )
     return DecisionView(
         success=True,
         schema_version=PRESENTER_SCHEMA_VERSION,
-        service_schema_version=_optional_text(
-            validated_response.get(
-                "schema_version"
-            ),
-            maximum_length=50,
+        service_schema_version=(
+            _optional_text(
+                validated_response.get(
+                    "schema_version"
+                ),
+                maximum_length=(
+                    MAXIMUM_SCHEMA_VERSION_LENGTH
+                ),
+            )
         ),
         service_name=_optional_text(
             validated_response.get(
                 "service"
             ),
-            maximum_length=100,
+            maximum_length=(
+                MAXIMUM_SERVICE_NAME_LENGTH
+            ),
         ),
         ticker=ticker,
         company_name=company_name,
@@ -948,7 +1528,9 @@ def build_decision_view(
             validated_response.get(
                 "model_version"
             ),
-            maximum_length=50,
+            maximum_length=(
+                MAXIMUM_MODEL_VERSION_LENGTH
+            ),
         ),
         title=_build_title(
             ticker=ticker,
@@ -960,8 +1542,10 @@ def build_decision_view(
         new_investor_badge=_badge(
             label="Nuevo inversor",
             value=new_investor_action,
-            tone=_tone_for_new_investor_action(
-                new_investor_action
+            tone=(
+                _tone_for_new_investor_action(
+                    new_investor_action
+                )
             ),
             help_text=(
                 "Acción recomendada para quien todavía "
@@ -1007,12 +1591,7 @@ def build_decision_view(
                 moat_strength
             ),
         ),
-        metrics=_build_metrics(
-            response=validated_response,
-            decision=decision,
-            raw_components=raw_components,
-            gates=gates,
-        ),
+        metrics=metrics,
         thesis=_section(
             title="Tesis de inversión",
             value=decision.get(
@@ -1043,7 +1622,9 @@ def build_decision_view(
             ),
         ),
         conditions_to_buy=_section(
-            title="Condiciones para comprar o aumentar",
+            title=(
+                "Condiciones para comprar o aumentar"
+            ),
             value=decision.get(
                 "conditions_to_buy"
             ),
@@ -1053,7 +1634,9 @@ def build_decision_view(
             ),
         ),
         conditions_to_reduce=_section(
-            title="Condiciones para reducir o salir",
+            title=(
+                "Condiciones para reducir o salir"
+            ),
             value=decision.get(
                 "conditions_to_reduce"
             ),
@@ -1063,9 +1646,13 @@ def build_decision_view(
             ),
         ),
         gates=gates,
-        ranking_components=ranking_components,
-        presentation_warnings=_string_list(
-            presentation_warnings
+        ranking_components=(
+            ranking_components
+        ),
+        presentation_warnings=(
+            _deduplicate_strings(
+                presentation_warnings
+            )
         ),
         raw_response=_safe_copy_mapping(
             validated_response
