@@ -69,3 +69,4 @@ class GateSeverity(str, Enum):
     INFO = "INFORMATIVO"
     WARNING = "ADVERTENCIA"
     BLOCKING = "BLOQUEANTE"
+
