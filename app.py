@@ -46,7 +46,53 @@ if page == "Radar del índice":
         a.metric("Compañías", len(df)); b.metric("Entradas", len(entries)); c.metric("Score medio", f"{df.global_score.mean():.1f}"); d.metric("Confianza media", f"{df.confidence.mean():.0f}%")
         display_cols = ["ticker","name","price","global_score","valuation","quality","cash","balance","growth","risk","confidence","recommendation"]
         st.dataframe(df[display_cols], use_container_width=True, hide_index=True)
-        fig = px.scatter(df, x="valuation", y="quality", size="market_cap", hover_name="ticker", color="global_score", title="Mapa valoración–calidad")
+        import numpy as np
+import pandas as pd
+
+# Asegurar columnas numéricas
+numeric_columns = ["valuation", "quality", "market_cap", "global_score"]
+
+for column in numeric_columns:
+    if column in df.columns:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+
+# El gráfico necesita valoración y calidad válidas
+radar_df = df.dropna(subset=["valuation", "quality"]).copy()
+
+# Plotly no admite NaN ni valores negativos en el tamaño
+valid_market_caps = radar_df.loc[
+    radar_df["market_cap"].notna() & (radar_df["market_cap"] > 0),
+    "market_cap",
+]
+
+fallback_market_cap = (
+    valid_market_caps.median()
+    if not valid_market_caps.empty
+    else 1.0
+)
+
+radar_df["market_cap"] = (
+    radar_df["market_cap"]
+    .replace([np.inf, -np.inf], np.nan)
+    .fillna(fallback_market_cap)
+    .clip(lower=1.0)
+)
+
+if radar_df.empty:
+    st.warning("No hay suficientes datos válidos para mostrar el mapa valoración–calidad.")
+else:
+    fig = px.scatter(
+        radar_df,
+        x="valuation",
+        y="quality",
+        size="market_cap",
+        size_max=45,
+        hover_name="ticker",
+        color="global_score",
+        title="Mapa valoración–calidad",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
         st.plotly_chart(fig, use_container_width=True)
         st.download_button("Descargar CSV", df.to_csv(index=False).encode("utf-8"), f"{universe_name}_radar.csv", "text/csv")
         st.download_button("Descargar JSON", df.to_json(orient="records", force_ascii=False, indent=2), f"{universe_name}_radar.json", "application/json")
