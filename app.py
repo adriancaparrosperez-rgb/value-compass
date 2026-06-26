@@ -23,12 +23,16 @@ st.set_page_config(
 
 CFG = settings()
 UNIVERSES = universes()
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_universe_tickers(
     universe_key: str,
 ) -> tuple[list[str], str]:
+    """Carga los componentes del universo y los conserva 24 horas."""
     definition = UNIVERSES[universe_key]
     return load_universe(definition)
+
 
 st.title("🧭 Value Compass")
 st.caption(
@@ -57,81 +61,155 @@ with st.sidebar:
     )
 
 
+# ============================================================
+# RADAR DEL ÍNDICE
+# ============================================================
+
 if page == "Radar del índice":
     st.header("Radar diario del universo")
 
     universe_name = st.selectbox(
         "Universo",
         list(UNIVERSES.keys()),
-        format_func=lambda x: UNIVERSES[x].get("label", x),
+        format_func=lambda key: UNIVERSES[key].get(
+            "label",
+            key,
+        ),
     )
 
-try:
-    default_tickers, universe_source = get_universe_tickers(
-        universe_name
+    try:
+        default_tickers, universe_source = get_universe_tickers(
+            universe_name
+        )
+
+    except Exception as exc:
+        default_tickers = []
+        universe_source = "error"
+
+        st.error(
+            "No se pudo cargar el universo seleccionado: "
+            f"{exc}"
+        )
+
+    source_labels = {
+        "remote": "componentes actualizados automáticamente",
+        "static": "lista configurada en el proyecto",
+        "fallback": "lista de respaldo",
+        "error": "universo no disponible",
+    }
+
+    st.caption(
+        f"{len(default_tickers)} valores · "
+        f"{source_labels.get(universe_source, universe_source)}"
     )
-except Exception as exc:
-    default_tickers = []
-    universe_source = "error"
 
-    st.error(
-        "No se pudo cargar el universo seleccionado: "
-        f"{exc}"
+    raw = st.text_area(
+        "Tickers (uno por línea o separados por comas)",
+        value="\n".join(default_tickers),
+        height=220,
     )
 
-source_labels = {
-    "remote": "componentes actualizados automáticamente",
-    "static": "lista configurada en el proyecto",
-    "fallback": "lista de respaldo",
-    "error": "universo no disponible",
-}
+    tickers = list(
+        dict.fromkeys(
+            item.strip().upper()
+            for item in raw.replace(",", "\n").splitlines()
+            if item.strip()
+        )
+    )
 
-st.caption(
-    f"{len(default_tickers)} valores · "
-    f"{source_labels.get(universe_source, universe_source)}"
-)
+    st.subheader("Configuración de ejecución")
 
-raw = st.text_area(
-    "Tickers (uno por línea o separados por comas)",
-    value="\n".join(default_tickers),
-    height=220,
-)
-    
-    tickers = [
-        item.strip().upper()
-        for item in raw.replace(",", "\n").splitlines()
-        if item.strip()
+    batch_col_1, batch_col_2 = st.columns(2)
+
+    with batch_col_1:
+        batch_size = st.selectbox(
+            "Compañías por lote",
+            options=[25, 50, 75, 100, 150, 200],
+            index=1,
+            help=(
+                "Para índices grandes es recomendable ejecutar "
+                "lotes de 25 o 50 compañías."
+            ),
+        )
+
+    maximum_start = max(
+        len(tickers) - 1,
+        0,
+    )
+
+    with batch_col_2:
+        batch_start = st.number_input(
+            "Empezar desde la posición",
+            min_value=0,
+            max_value=maximum_start,
+            value=0,
+            step=batch_size,
+        )
+
+    batch_start_int = int(batch_start)
+    batch_size_int = int(batch_size)
+
+    selected_tickers = tickers[
+        batch_start_int:
+        batch_start_int + batch_size_int
     ]
 
-    c1, c2 = st.columns([1, 3])
+    batch_end = min(
+        batch_start_int + len(selected_tickers),
+        len(tickers),
+    )
 
-    with c1:
+    if tickers:
+        st.caption(
+            f"Se analizarán las posiciones "
+            f"{batch_start_int + 1}–{batch_end} "
+            f"de {len(tickers)}."
+        )
+    else:
+        st.caption(
+            "No hay tickers disponibles en el universo seleccionado."
+        )
+
+    button_col, info_col = st.columns([1, 3])
+
+    with button_col:
         run = st.button(
             "Ejecutar cribado ahora",
             type="primary",
             use_container_width=True,
         )
 
-    with c2:
+    with info_col:
         st.caption(
             "La ejecución programada usa la misma lógica y guarda "
             "CSV, Excel, JSON y el histórico en SQLite."
         )
 
     if run:
-        if not tickers:
-            st.warning("Introduce al menos un ticker.")
+        if not selected_tickers:
+            st.warning(
+                "No hay compañías en el lote seleccionado."
+            )
+
         else:
             with st.spinner(
-                f"Analizando {len(tickers)} compañías..."
+                f"Analizando {len(selected_tickers)} compañías..."
             ):
                 try:
                     df_result = ScreenerService(CFG).run(
                         universe_name,
-                        tickers,
+                        selected_tickers,
                     )
+
                     st.session_state["screen_df"] = df_result
-                    st.session_state["screen_universe"] = universe_name
+                    st.session_state[
+                        "screen_universe"
+                    ] = universe_name
+
+                    st.session_state[
+                        "screen_batch_start"
+                    ] = batch_start_int
+
                 except Exception as exc:
                     st.error(
                         "No se pudo completar el cribado: "
@@ -140,7 +218,9 @@ raw = st.text_area(
 
     df = None
 
-    stored_universe = st.session_state.get("screen_universe")
+    stored_universe = st.session_state.get(
+        "screen_universe"
+    )
 
     if stored_universe == universe_name:
         df = st.session_state.get("screen_df")
@@ -158,6 +238,7 @@ raw = st.text_area(
         if files:
             try:
                 df = pd.read_csv(files[0])
+
             except Exception as exc:
                 st.warning(
                     "No se pudo cargar el último archivo guardado: "
@@ -207,7 +288,7 @@ raw = st.text_area(
         metric_1, metric_2, metric_3, metric_4 = st.columns(4)
 
         metric_1.metric(
-            "Compañías",
+            "Compañías analizadas",
             len(df),
         )
 
@@ -267,11 +348,17 @@ raw = st.text_area(
             if column in df.columns
         ]
 
-        st.dataframe(
-            df[display_columns],
-            use_container_width=True,
-            hide_index=True,
-        )
+        if display_columns:
+            st.dataframe(
+                df[display_columns],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.warning(
+                "El resultado no contiene columnas disponibles "
+                "para mostrar."
+            )
 
         required_chart_columns = {
             "ticker",
@@ -282,7 +369,9 @@ raw = st.text_area(
 
         if not required_chart_columns.issubset(df.columns):
             missing_columns = sorted(
-                required_chart_columns.difference(df.columns)
+                required_chart_columns.difference(
+                    df.columns
+                )
             )
 
             st.warning(
@@ -314,7 +403,10 @@ raw = st.text_area(
                         radar_df["market_cap"],
                         errors="coerce",
                     )
-                    .replace([np.inf, -np.inf], np.nan)
+                    .replace(
+                        [np.inf, -np.inf],
+                        np.nan,
+                    )
                 )
 
                 valid_market_caps = radar_df.loc[
@@ -335,22 +427,38 @@ raw = st.text_area(
                     .clip(lower=1.0)
                 )
 
-                minimum_cap = radar_df["market_cap"].min()
-                maximum_cap = radar_df["market_cap"].max()
+                minimum_cap = float(
+                    radar_df["market_cap"].min()
+                )
+
+                maximum_cap = float(
+                    radar_df["market_cap"].max()
+                )
 
                 if maximum_cap > minimum_cap:
+                    log_minimum = np.log10(
+                        minimum_cap
+                    )
+
+                    log_maximum = np.log10(
+                        maximum_cap
+                    )
+
                     radar_df["marker_size"] = (
                         10
                         + 40
                         * (
-                            np.log10(radar_df["market_cap"])
-                            - np.log10(minimum_cap)
+                            np.log10(
+                                radar_df["market_cap"]
+                            )
+                            - log_minimum
                         )
                         / (
-                            np.log10(maximum_cap)
-                            - np.log10(minimum_cap)
+                            log_maximum
+                            - log_minimum
                         )
                     )
+
                 else:
                     radar_df["marker_size"] = 20.0
 
@@ -379,11 +487,16 @@ raw = st.text_area(
                         "<b>%{hovertext}</b><br>"
                         "Valoración: %{x:.1f}<br>"
                         "Calidad: %{y:.1f}<br>"
-                        "Score global: %{customdata[1]:.1f}<br>"
+                        "Score global: "
+                        "%{customdata[1]:.1f}<br>"
                         "Capitalización: "
                         "%{customdata[0]:,.0f}"
                         "<extra></extra>"
                     )
+                )
+
+                fig.update_layout(
+                    legend_title_text="Score global",
                 )
 
                 st.plotly_chart(
@@ -399,7 +512,10 @@ raw = st.text_area(
                 data=df.to_csv(
                     index=False,
                 ).encode("utf-8"),
-                file_name=f"{universe_name}_radar.csv",
+                file_name=(
+                    f"{universe_name}_radar_"
+                    f"{batch_start_int + 1}_{batch_end}.csv"
+                ),
                 mime="text/csv",
                 use_container_width=True,
             )
@@ -412,11 +528,18 @@ raw = st.text_area(
                     force_ascii=False,
                     indent=2,
                 ),
-                file_name=f"{universe_name}_radar.json",
+                file_name=(
+                    f"{universe_name}_radar_"
+                    f"{batch_start_int + 1}_{batch_end}.json"
+                ),
                 mime="application/json",
                 use_container_width=True,
             )
 
+
+# ============================================================
+# ANÁLISIS INDIVIDUAL
+# ============================================================
 
 elif page == "Análisis individual":
     st.header("Ficha individual")
@@ -432,12 +555,15 @@ elif page == "Análisis individual":
     ):
         if not ticker:
             st.warning("Introduce un ticker.")
+
         else:
             try:
                 with st.spinner(
                     f"Cargando información de {ticker}..."
                 ):
-                    snap = YahooProvider().get_snapshot(ticker)
+                    snap = YahooProvider().get_snapshot(
+                        ticker
+                    )
 
                     score = score_snapshot(
                         snap,
@@ -450,8 +576,13 @@ elif page == "Análisis individual":
                         ],
                     )
 
-                    st.session_state["snap"] = snap.to_dict()
-                    st.session_state["score"] = score.to_dict()
+                    st.session_state[
+                        "snap"
+                    ] = snap.to_dict()
+
+                    st.session_state[
+                        "score"
+                    ] = score.to_dict()
 
             except Exception as exc:
                 st.error(
@@ -522,24 +653,40 @@ elif page == "Análisis individual":
             st.write(rationale)
 
         score_dimensions = {
-            "Valoración": company_score.get("valuation"),
-            "Calidad": company_score.get("quality"),
-            "Caja": company_score.get("cash"),
-            "Balance": company_score.get("balance"),
-            "Crecimiento": company_score.get("growth"),
+            "Valoración": company_score.get(
+                "valuation"
+            ),
+            "Calidad": company_score.get(
+                "quality"
+            ),
+            "Caja": company_score.get(
+                "cash"
+            ),
+            "Balance": company_score.get(
+                "balance"
+            ),
+            "Crecimiento": company_score.get(
+                "growth"
+            ),
             "Capital allocation": company_score.get(
                 "capital_allocation"
             ),
             "Momentum fundamental": company_score.get(
                 "momentum_fundamental"
             ),
-            "Riesgo": company_score.get("risk"),
+            "Riesgo": company_score.get(
+                "risk"
+            ),
         }
 
         score_df = pd.DataFrame(
             {
-                "Dimensión": list(score_dimensions.keys()),
-                "Score": list(score_dimensions.values()),
+                "Dimensión": list(
+                    score_dimensions.keys()
+                ),
+                "Score": list(
+                    score_dimensions.values()
+                ),
             }
         )
 
@@ -573,6 +720,10 @@ elif page == "Análisis individual":
             use_container_width=True,
         )
 
+
+# ============================================================
+# VALORACIÓN DCF
+# ============================================================
 
 elif page == "Valoración DCF":
     st.header("DCF configurable")
@@ -646,21 +797,23 @@ elif page == "Valoración DCF":
                 shares,
             )
 
-            a, b, c = st.columns(3)
+            result_col_1, result_col_2, result_col_3 = (
+                st.columns(3)
+            )
 
-            a.metric(
+            result_col_1.metric(
                 "Enterprise value",
                 f"{result.enterprise_value:,.0f}",
             )
 
-            b.metric(
+            result_col_2.metric(
                 "Equity value",
                 f"{result.equity_value:,.0f}",
             )
 
             value_per_share = result.value_per_share
 
-            c.metric(
+            result_col_3.metric(
                 "Valor por acción",
                 (
                     f"{value_per_share:,.2f}"
@@ -675,7 +828,9 @@ elif page == "Valoración DCF":
                         1,
                         len(result.projected_fcfs) + 1,
                     ),
-                    "FCF proyectado": result.projected_fcfs,
+                    "FCF proyectado": (
+                        result.projected_fcfs
+                    ),
                 }
             ).set_index("Año")
 
@@ -693,21 +848,31 @@ elif page == "Valoración DCF":
             )
 
 
+# ============================================================
+# METODOLOGÍA
+# ============================================================
+
 else:
-    st.header("Metodología")
+    st.header("Metodología y datos")
 
     st.markdown(
         """
-**Dos niveles de análisis**
+### Dos niveles de análisis
 
-1. El radar diario recorre el universo completo con una
-   precarga homogénea y un scoring provisional.
-2. La ficha individual permite validar fuentes oficiales,
-   normalizar la caja y ejecutar una valoración detallada.
+1. El radar diario recorre el universo seleccionado mediante
+   una precarga homogénea y un scoring provisional.
+2. La ficha individual permite validar fuentes, normalizar
+   la caja y ejecutar una valoración detallada.
 
-**Principios:** separación entre calidad y precio, creación
-de valor por acción, normalización del FCF, prudencia ante
-datos incompletos, trazabilidad y versionado.
+### Principios metodológicos
+
+- Separación entre calidad empresarial y precio.
+- Evaluación de la creación de valor por acción.
+- Normalización del flujo de caja libre.
+- Prudencia ante datos incompletos.
+- Trazabilidad y versionado de resultados.
+- Reducción automática de la confianza cuando faltan datos.
+- Revisión de cifras materiales en fuentes oficiales.
 """
     )
 
