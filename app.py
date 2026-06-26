@@ -140,8 +140,6 @@ else:
         mime="application/json",
     )
     
-    st.plotly_chart(fig, use_container_width=True)
-    else:
     fig = px.scatter(
         radar_df,
         x="valuation",
