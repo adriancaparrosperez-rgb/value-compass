@@ -1,0 +1,43 @@
+IBEX35:
+  label: IBEX 35 (editable)
+  currency: EUR
+  tickers:
+    - ANA.MC
+    - ANE.MC
+    - ACX.MC
+    - ACS.MC
+    - AENA.MC
+    - AMS.MC
+    - MTS.MC
+    - SAB.MC
+    - SAN.MC
+    - BKT.MC
+    - BBVA.MC
+    - CABK.MC
+    - CLNX.MC
+    - ENG.MC
+    - ELE.MC
+    - FER.MC
+    - FDR.MC
+    - GRF.MC
+    - IAG.MC
+    - IBE.MC
+    - ITX.MC
+    - IDR.MC
+    - COL.MC
+    - LOG.MC
+    - MAP.MC
+    - MRL.MC
+    - NTGY.MC
+    - PUIG.MC
+    - RED.MC
+    - REP.MC
+    - ROVI.MC
+    - SCYR.MC
+    - SLR.MC
+    - TEF.MC
+    - UNI.MC
+CUSTOM:
+  label: Universo personalizado
+  currency: EUR
+  tickers: []
