@@ -1,0 +1,30 @@
+name: Deploy test Space
+
+on:
+  push:
+    branches:
+      - feature/master-decision-engine
+
+  workflow_dispatch:
+
+jobs:
+  deploy-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push branch to Hugging Face test Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git config user.email "github-actions@github.com"
+          git config user.name "github-actions"
+
+          git remote add hf-test \
+            https://adriancaparrosperez-rgb:${HF_TOKEN}@huggingface.co/spaces/adriancaparrosperez-rgb/value-compass-test
+
+          git push --force hf-test HEAD:main
