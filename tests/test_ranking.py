@@ -76,27 +76,25 @@ def test_complete_analysis_returns_score() -> None:
 
 def test_score_is_clamped_to_valid_range() -> None:
     analysis = _complete_analysis()
-
     analysis.business.operating_quality_score = 150.0
     analysis.business.organic_growth_score = 150.0
     analysis.business.balance_score = 150.0
     analysis.business.cash_score = 150.0
     analysis.business.capital_allocation_score = 150.0
-
     analysis.accounting.accounting_quality_score = 150.0
     analysis.accounting.earnings_quality_score = 150.0
     analysis.accounting.cash_conversion_score = 150.0
-
     analysis.per_share.per_share_value_score = 150.0
     analysis.moat.reviewed_score = 150.0
     analysis.valuation.valuation_score = 150.0
-
+    analysis.data_quality.coverage_score = 150.0
+    analysis.data_quality.freshness_score = 150.0
+    analysis.data_quality.consistency_score = 150.0
+    analysis.data_quality.source_quality_score = 150.0
     result = calculate_ranking(
         analysis
     )
-
     assert result.score == 100.0
-
 
 def test_missing_all_dimensions_returns_none() -> None:
     analysis = MasterAnalysisInput(
