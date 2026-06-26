@@ -1,16 +1,11 @@
 from __future__ import annotations
-
 from enum import Enum
-
-
 class RadarSignal(str, Enum):
     PRIORITY_CANDIDATE = "CANDIDATA PRIORITARIA"
     CANDIDATE = "CANDIDATA"
     WATCH = "VIGILAR"
     REJECT = "DESCARTAR EN PRECRIBADO"
     UNRELIABLE_DATA = "DATOS NO FIABLES"
-
-
 class NewInvestorAction(str, Enum):
     STRONG_BUY = "COMPRA CLARA"
     BUY = "COMPRAR"
@@ -19,8 +14,6 @@ class NewInvestorAction(str, Enum):
     AVOID = "DESCARTAR"
     MASTER_REVIEW = "REQUIERE ANÁLISIS MAESTRO"
     UNRELIABLE_DATA = "DATOS NO FIABLES"
-
-
 class ExistingHolderAction(str, Enum):
     INCREASE = "AUMENTAR"
     HOLD = "MANTENER"
@@ -28,54 +21,50 @@ class ExistingHolderAction(str, Enum):
     EXIT = "SALIR"
     REVIEW_THESIS = "REVISAR TESIS"
     UNRELIABLE_DATA = "DATOS NO FIABLES"
-
-
 class MoatStrength(str, Enum):
     STRONG = "FUERTE"
     MODERATE = "MODERADO"
     WEAK = "DÉBIL"
     NOT_EVALUATED = "NO EVALUADO"
-
-
 class MoatTrend(str, Enum):
     IMPROVING = "MEJORANDO"
     STABLE = "ESTABLE"
     DETERIORATING = "DETERIORÁNDOSE"
     RAPIDLY_DETERIORATING = "DETERIORO RÁPIDO"
     NOT_EVALUATED = "NO EVALUADO"
-
-
 class EvidenceConfidence(str, Enum):
     HIGH = "ALTA"
     MEDIUM = "MEDIA"
     LOW = "BAJA"
     NOT_EVALUABLE = "NO EVALUABLE"
-
-
 class RiskLevel(str, Enum):
     LOW = "BAJO"
     MEDIUM = "MEDIO"
     HIGH = "ALTO"
     CRITICAL = "CRÍTICO"
     NOT_EVALUATED = "NO EVALUADO"
-
-
 class DataQualityStatus(str, Enum):
     VALIDATED = "VALIDADOS"
     PARTIALLY_VALIDATED = "PARCIALMENTE VALIDADOS"
     INSUFFICIENT = "INSUFICIENTES"
     UNRELIABLE = "NO FIABLES"
-
-
 class ValuationStatus(str, Enum):
+    """
+    Estados generales utilizados por el motor de valoración.
+    Los estados UNDERVALUED, FAIRLY_VALUED y OVERVALUED
+    son los empleados por el módulo de escenarios.
+    Los estados de mayor detalle se conservan para mantener
+    compatibilidad con los módulos anteriores.
+    """
+    UNDERVALUED = "INFRAVALORADA"
+    FAIRLY_VALUED = "VALORACIÓN RAZONABLE"
+    OVERVALUED = "SOBREVALORADA"
     VERY_ATTRACTIVE = "MUY ATRACTIVA"
     ATTRACTIVE = "ATRACTIVA"
     REASONABLE = "RAZONABLE"
     EXPENSIVE = "EXIGENTE"
     VERY_EXPENSIVE = "MUY EXIGENTE"
     NOT_EVALUATED = "NO EVALUADA"
-
-
 class GateSeverity(str, Enum):
     INFO = "INFORMATIVO"
     WARNING = "ADVERTENCIA"
