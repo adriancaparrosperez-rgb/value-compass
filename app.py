@@ -92,8 +92,51 @@ else:
         title="Mapa valoración–calidad",
     )
 
+
     st.plotly_chart(fig, use_container_width=True)
-        st.plotly_chart(fig, use_container_width=True)
+    else:
+    fig = px.scatter(
+        radar_df,
+        x="valuation",
+        y="quality",
+        size="marker_size",
+        size_max=45,
+        hover_name="ticker",
+        color="global_score",
+        custom_data=["market_cap"],
+        title="Mapa valoración–calidad",
+    )
+
+    fig.update_traces(
+        hovertemplate=(
+            "<b>%{hovertext}</b><br>"
+            "Valoración: %{x:.1f}<br>"
+            "Calidad: %{y:.1f}<br>"
+            "Capitalización: %{customdata[0]:,.0f}"
+            "<extra></extra>"
+        )
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.download_button(
+        "Descargar CSV",
+        df.to_csv(index=False).encode("utf-8"),
+        f"{universe_name}_radar.csv",
+        "text/csv",
+    )
+
+    st.download_button(
+        "Descargar JSON",
+        df.to_json(
+            orient="records",
+            force_ascii=False,
+            indent=2,
+        ),
+        f"{universe_name}_radar.json",
+        "application/json",
+    )
+
         st.download_button("Descargar CSV", df.to_csv(index=False).encode("utf-8"), f"{universe_name}_radar.csv", "text/csv")
         st.download_button("Descargar JSON", df.to_json(orient="records", force_ascii=False, indent=2), f"{universe_name}_radar.json", "application/json")
 
