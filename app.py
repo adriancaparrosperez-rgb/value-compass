@@ -11,6 +11,7 @@ from src.config import settings, universes
 from src.providers.yahoo import YahooProvider
 from src.scoring.engine import score_snapshot
 from src.services.screener import ScreenerService
+from src.services.universe_loader import load_universe
 from src.valuation.dcf import dcf_value
 
 
@@ -22,7 +23,12 @@ st.set_page_config(
 
 CFG = settings()
 UNIVERSES = universes()
-
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_universe_tickers(
+    universe_key: str,
+) -> tuple[list[str], str]:
+    definition = UNIVERSES[universe_key]
+    return load_universe(definition)
 
 st.title("🧭 Value Compass")
 st.caption(
@@ -60,14 +66,37 @@ if page == "Radar del índice":
         format_func=lambda x: UNIVERSES[x].get("label", x),
     )
 
-    default_tickers = UNIVERSES[universe_name].get("tickers", [])
+try:
+    default_tickers, universe_source = get_universe_tickers(
+        universe_name
+    )
+except Exception as exc:
+    default_tickers = []
+    universe_source = "error"
 
-    raw = st.text_area(
-        "Tickers (uno por línea o separados por comas)",
-        value="\n".join(default_tickers),
-        height=180,
+    st.error(
+        "No se pudo cargar el universo seleccionado: "
+        f"{exc}"
     )
 
+source_labels = {
+    "remote": "componentes actualizados automáticamente",
+    "static": "lista configurada en el proyecto",
+    "fallback": "lista de respaldo",
+    "error": "universo no disponible",
+}
+
+st.caption(
+    f"{len(default_tickers)} valores · "
+    f"{source_labels.get(universe_source, universe_source)}"
+)
+
+raw = st.text_area(
+    "Tickers (uno por línea o separados por comas)",
+    value="\n".join(default_tickers),
+    height=220,
+)
+    
     tickers = [
         item.strip().upper()
         for item in raw.replace(",", "\n").splitlines()
