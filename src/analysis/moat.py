@@ -398,12 +398,12 @@ def assess_moat(
         switching_costs_score=switching_costs,
         network_effects_score=network_effects,
         brand_score=brand,
-        scale_score=scale,
-        data_advantage_score=data_advantage,
-        intellectual_property_score=(
-            intellectual_property
-        ),
-        distribution_score=distribution,
+        scale_score=scale,        evidence=evidence,
+        threats=threats,
+        warnings=warnings,
+        notes=notes,
+    )
+    )distribution_score=distribution,
         regulatory_advantage_score=(
             regulatory_advantage
         ),
@@ -426,5 +426,6 @@ def assess_moat(
         ),
         evidence=evidence,
         threats=threats,
+        warnings=warnings,
         notes=notes,
     )
