@@ -1668,3 +1668,4 @@ def build_decision_view_dict(
     return build_decision_view(
         response
     ).to_dict()
+
