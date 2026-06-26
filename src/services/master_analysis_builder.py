@@ -22,16 +22,35 @@ from src.decision.models import (
     ValuationAssessment,
 )
 from src.models import CompanySnapshot, ScoreCard
-BUILDER_VERSION = "1.2.0"
+BUILDER_VERSION = "1.3.0"
 DEFAULT_MODEL_VERSION = "0.1.0"
 MINIMUM_PRELIMINARY_CONFIDENCE = 55.0
 MINIMUM_PRELIMINARY_COVERAGE = 50.0
 YAHOO_SOURCE_TYPE = "secondary_market_data"
 GENERIC_SOURCE_TYPE = "secondary_data"
-YAHOO_SOURCE_QUALITY_SCORE = 35.0
+FINANCIAL_SOURCE_TYPES = frozenset(
+    {
+        "official_filing",
+        "annual_report",
+        "quarterly_report",
+        "interim_report",
+        "regulatory_filing",
+        "earnings_release",
+        "official_financial_results",
+    }
+)
+OFFICIAL_CONTEXT_SOURCE_TYPES = frozenset(
+    {
+        "official_company_page",
+        "official_press_release",
+        "official_investor_relations",
+    }
+)
+SINGLE_SECONDARY_SOURCE_SCORE = 35.0
 MULTIPLE_SECONDARY_SOURCE_SCORE = 50.0
-ONE_OFFICIAL_SOURCE_SCORE = 80.0
-MULTIPLE_OFFICIAL_SOURCE_SCORE = 95.0
+OFFICIAL_CONTEXT_SOURCE_SCORE = 60.0
+ONE_OFFICIAL_FINANCIAL_SOURCE_SCORE = 80.0
+MULTIPLE_OFFICIAL_FINANCIAL_SOURCE_SCORE = 95.0
 class MasterAnalysisBuilderError(ValueError):
     """Error controlado al construir un análisis maestro."""
 def _number(
@@ -69,6 +88,10 @@ def _normalize_text(
 ) -> str | None:
     if value is None:
         return None
+    if maximum_length < 1:
+        raise ValueError(
+            "maximum_length debe ser mayor que cero."
+        )
     if isinstance(value, str):
         normalized_value = value.strip()
     else:
@@ -76,6 +99,8 @@ def _normalize_text(
     if not normalized_value:
         return None
     if len(normalized_value) > maximum_length:
+        if maximum_length == 1:
+            return "…"
         return (
             normalized_value[: maximum_length - 1]
             + "…"
@@ -130,11 +155,18 @@ def _freshness_score(
     parsed_value = _parse_datetime(value)
     if parsed_value is None:
         return 0.0
-    current_time = (
-        now.astimezone(timezone.utc)
-        if now is not None
-        else datetime.now(timezone.utc)
-    )
+    if now is None:
+        current_time = datetime.now(
+            timezone.utc
+        )
+    elif now.tzinfo is None:
+        current_time = now.replace(
+            tzinfo=timezone.utc
+        )
+    else:
+        current_time = now.astimezone(
+            timezone.utc
+        )
     age_days = (
         current_time - parsed_value
     ).total_seconds() / 86_400.0
@@ -176,7 +208,10 @@ def _latest_datetime_string(
 def _normalize_model_version(
     model_version: Any,
 ) -> str:
-    if not isinstance(model_version, str):
+    if not isinstance(
+        model_version,
+        str,
+    ):
         raise MasterAnalysisBuilderError(
             "La versión del modelo debe ser texto."
         )
@@ -311,37 +346,81 @@ def _validate_source(
         ),
         is_official=source.is_official,
     )
+def _normalized_source_type(
+    source: SourceReference,
+) -> str:
+    return source.source_type.strip().casefold()
+def _is_official_financial_source(
+    source: SourceReference,
+) -> bool:
+    return (
+        source.is_official
+        and _normalized_source_type(
+            source
+        )
+        in FINANCIAL_SOURCE_TYPES
+    )
+def _is_official_context_source(
+    source: SourceReference,
+) -> bool:
+    return (
+        source.is_official
+        and _normalized_source_type(
+            source
+        )
+        in OFFICIAL_CONTEXT_SOURCE_TYPES
+    )
 def _source_key(
     source: SourceReference,
-) -> tuple[str, str, str]:
+) -> tuple[str, str]:
+    normalized_url = (
+        source.url.strip().casefold().rstrip("/")
+        if source.url
+        else ""
+    )
+    if normalized_url:
+        return (
+            "url",
+            normalized_url,
+        )
     return (
-        source.name.casefold(),
-        source.source_type.casefold(),
-        (
-            source.url.casefold()
-            if source.url
-            else ""
-        ),
+        source.name.strip().casefold(),
+        source.source_type.strip().casefold(),
     )
 def _deduplicate_sources(
     sources: list[SourceReference],
 ) -> list[SourceReference]:
     result: list[SourceReference] = []
     seen: set[
-        tuple[str, str, str]
+        tuple[str, str]
     ] = set()
     for source in sources:
-        source_key = _source_key(source)
+        source_key = _source_key(
+            source
+        )
         if source_key in seen:
             continue
         seen.add(source_key)
         result.append(source)
     return result
+def _provider_metadata(
+    snapshot: CompanySnapshot,
+) -> dict[str, Any]:
+    metadata = snapshot.provider_metadata
+    if isinstance(
+        metadata,
+        dict,
+    ):
+        return metadata
+    return {}
 def _is_yahoo_snapshot(
     snapshot: CompanySnapshot,
 ) -> bool:
+    metadata = _provider_metadata(
+        snapshot
+    )
     provider_name = _normalize_text(
-        snapshot.provider_metadata.get(
+        metadata.get(
             "provider"
         ),
         maximum_length=100,
@@ -362,22 +441,34 @@ def _is_yahoo_snapshot(
 def _build_snapshot_source(
     snapshot: CompanySnapshot,
 ) -> SourceReference:
+    metadata = _provider_metadata(
+        snapshot
+    )
     source_name = (
         _normalize_text(
             snapshot.source,
             maximum_length=250,
         )
         or _normalize_text(
-            snapshot.provider_metadata.get(
+            metadata.get(
                 "provider"
             ),
             maximum_length=250,
         )
         or "Proveedor de precarga"
     )
-    if _is_yahoo_snapshot(snapshot):
+    if _is_yahoo_snapshot(
+        snapshot
+    ):
+        normalized_ticker = (
+            _normalize_text(
+                snapshot.ticker,
+                maximum_length=30,
+            )
+            or snapshot.ticker
+        )
         encoded_ticker = quote(
-            snapshot.ticker,
+            normalized_ticker,
             safe=".-^=",
         )
         source_url = (
@@ -436,23 +527,49 @@ def _build_sources(
 def _source_quality_score(
     sources: list[SourceReference],
 ) -> float:
-    official_count = sum(
-        source.is_official
+    official_financial_count = sum(
+        _is_official_financial_source(
+            source
+        )
         for source in sources
     )
-    secondary_count = (
-        len(sources)
-        - official_count
+    official_context_count = sum(
+        _is_official_context_source(
+            source
+        )
+        for source in sources
     )
-    if official_count >= 2:
-        return MULTIPLE_OFFICIAL_SOURCE_SCORE
-    if official_count == 1:
-        return ONE_OFFICIAL_SOURCE_SCORE
+    secondary_count = sum(
+        not source.is_official
+        for source in sources
+    )
+    if official_financial_count >= 2:
+        return (
+            MULTIPLE_OFFICIAL_FINANCIAL_SOURCE_SCORE
+        )
+    if official_financial_count == 1:
+        return (
+            ONE_OFFICIAL_FINANCIAL_SOURCE_SCORE
+        )
+    if official_context_count >= 1:
+        return OFFICIAL_CONTEXT_SOURCE_SCORE
     if secondary_count >= 2:
         return MULTIPLE_SECONDARY_SOURCE_SCORE
     if secondary_count == 1:
-        return YAHOO_SOURCE_QUALITY_SCORE
+        return SINGLE_SECONDARY_SOURCE_SCORE
     return 0.0
+def _latest_financial_source_date(
+    sources: list[SourceReference],
+) -> str | None:
+    return _latest_datetime_string(
+        [
+            source.published_at
+            for source in sources
+            if _is_official_financial_source(
+                source
+            )
+        ]
+    )
 def _partial_data_status() -> DataQualityStatus:
     for attribute_name in (
         "PARTIAL",
@@ -477,10 +594,14 @@ def _preliminary_data_status(
             snapshot.critical_missing_fields
         )
         or snapshot.price is None
-        or score.confidence
-        < MINIMUM_PRELIMINARY_CONFIDENCE
-        or score.overall_coverage
-        < MINIMUM_PRELIMINARY_COVERAGE
+        or (
+            score.confidence
+            < MINIMUM_PRELIMINARY_CONFIDENCE
+        )
+        or (
+            score.overall_coverage
+            < MINIMUM_PRELIMINARY_COVERAGE
+        )
     )
     if has_blocking_problem:
         return DataQualityStatus.INSUFFICIENT
@@ -490,37 +611,51 @@ def _build_data_quality(
     score: ScoreCard,
     sources: list[SourceReference],
 ) -> DataQualityAssessment:
+    snapshot_coverage = (
+        _bounded_score(
+            snapshot.coverage_score
+        )
+        or 0.0
+    )
+    score_coverage = (
+        _bounded_score(
+            score.overall_coverage
+        )
+        or 0.0
+    )
     coverage_score = round(
         (
-            snapshot.coverage_score
-            + score.overall_coverage
+            snapshot_coverage
+            + score_coverage
         )
         / 2.0,
         1,
     )
-    latest_price_date = _latest_datetime_string(
-        [
-            snapshot.price_date,
-            snapshot.fetched_at,
-        ]
+    latest_price_date = (
+        _latest_datetime_string(
+            [
+                snapshot.price_date,
+                snapshot.fetched_at,
+            ]
+        )
     )
     latest_fundamentals_date = (
         _latest_datetime_string(
             [
                 snapshot.fundamentals_date,
-                *[
-                    source.published_at
-                    for source in sources
-                    if source.is_official
-                ],
+                _latest_financial_source_date(
+                    sources
+                ),
             ]
         )
     )
     price_freshness = _freshness_score(
         latest_price_date
     )
-    fundamentals_freshness = _freshness_score(
-        latest_fundamentals_date
+    fundamentals_freshness = (
+        _freshness_score(
+            latest_fundamentals_date
+        )
     )
     freshness_score = round(
         (
@@ -539,28 +674,37 @@ def _build_data_quality(
         source.is_official
         for source in sources
     )
+    official_financial_source_count = sum(
+        _is_official_financial_source(
+            source
+        )
+        for source in sources
+    )
     warnings: list[Any] = [
         *snapshot.warnings,
         *score.warnings,
     ]
-    if official_source_count == 0:
+    warnings.append(
+        "El ticker es internamente consistente entre snapshot "
+        "y scoring, pero no ha sido validado externamente."
+    )
+    if official_financial_source_count == 0:
         warnings.append(
-            "No se ha incorporado ninguna fuente oficial. "
-            "Los datos deben contrastarse antes de ejecutar "
-            "una decisión maestra."
+            "No se ha incorporado ninguna fuente financiera "
+            "oficial que permita contrastar los fundamentales."
         )
     else:
         warnings.append(
-            "La existencia de fuentes oficiales no implica "
-            "por sí sola que precio, moneda, capitalización "
-            "o fundamentales hayan sido reconciliados."
+            "La presencia de documentación financiera oficial "
+            "no implica que cada magnitud haya sido reconciliada "
+            "campo por campo."
         )
     if fundamentals_freshness < 50.0:
         warnings.append(
             "La fecha de los fundamentales es antigua "
             "o no ha podido validarse."
         )
-    if score.overall_coverage < 75.0:
+    if score_coverage < 75.0:
         warnings.append(
             "La cobertura del precribado es parcial."
         )
@@ -609,9 +753,7 @@ def _build_data_quality(
         ),
         price_validated=False,
         currency_validated=False,
-        ticker_validated=bool(
-            snapshot.ticker
-        ),
+        ticker_validated=False,
         market_cap_validated=False,
         fundamentals_validated=False,
         price_date=latest_price_date,
@@ -654,7 +796,9 @@ def _covered_score(
         dimension,
     ):
         return None
-    return _bounded_score(value)
+    return _bounded_score(
+        value
+    )
 def _build_business(
     snapshot: CompanySnapshot,
     score: ScoreCard,
@@ -870,12 +1014,10 @@ def _build_valuation(
     snapshot: CompanySnapshot,
     score: ScoreCard,
 ) -> ValuationAssessment:
-    multiples_score = (
-        _covered_score(
-            score,
-            "valuation",
-            score.valuation,
-        )
+    multiples_score = _covered_score(
+        score,
+        "valuation",
+        score.valuation,
     )
     return ValuationAssessment(
         current_price=_number(
@@ -936,6 +1078,8 @@ def build_master_analysis(
     Construye un MasterAnalysisInput prudente y extensible.
     El builder provisional nunca declara como validados datos
     concretos únicamente por haber recibido una fuente oficial.
+    Las fuentes financieras oficiales se distinguen de las
+    fuentes corporativas meramente contextuales.
     Los bloques enriquecidos opcionales sustituyen por completo
     el bloque provisional correspondiente.
     """
