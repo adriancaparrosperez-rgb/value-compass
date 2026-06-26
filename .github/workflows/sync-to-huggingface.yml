@@ -1,9 +1,8 @@
-name: Sync to Hugging Face
+name: Sync to Hugging Face Hub
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -11,10 +10,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Sync GitHub repository to Hugging Face Space
-        uses: huggingface/hub-sync@main
+      - name: Descargar repositorio
+        uses: actions/checkout@v6
+
+      - name: Sincronizar con Hugging Face
+        uses: huggingface/hub-sync@v0.1.0
         with:
-          github_repo_id: adriancaparrosperez-rgb/value-compass
+          github_repo_id: ${{ github.repository }}
           huggingface_repo_id: AdrianCP/value_compass
           repo_type: space
+          space_sdk: gradio
           hf_token: ${{ secrets.HF_TOKEN }}
