@@ -114,7 +114,9 @@ class MoatAssessment:
     reviewed_score: float | None = None
     evidence: list[str] = field(default_factory=list)
     threats: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    
 @dataclass
 class BusinessAssessment:
     sector: str | None = None
