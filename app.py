@@ -92,7 +92,54 @@ else:
         title="Mapa valoración–calidad",
     )
 
+if radar_df.empty:
+    st.warning(
+        "No hay suficientes datos válidos para mostrar "
+        "el mapa valoración–calidad."
+    )
+else:
+    fig = px.scatter(
+        radar_df,
+        x="valuation",
+        y="quality",
+        size="marker_size",
+        size_max=45,
+        hover_name="ticker",
+        color="global_score",
+        custom_data=["market_cap"],
+        title="Mapa valoración–calidad",
+    )
 
+    fig.update_traces(
+        hovertemplate=(
+            "<b>%{hovertext}</b><br>"
+            "Valoración: %{x:.1f}<br>"
+            "Calidad: %{y:.1f}<br>"
+            "Capitalización: %{customdata[0]:,.0f}"
+            "<extra></extra>"
+        )
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.download_button(
+        label="Descargar CSV",
+        data=df.to_csv(index=False).encode("utf-8"),
+        file_name=f"{universe_name}_radar.csv",
+        mime="text/csv",
+    )
+
+    st.download_button(
+        label="Descargar JSON",
+        data=df.to_json(
+            orient="records",
+            force_ascii=False,
+            indent=2,
+        ),
+        file_name=f"{universe_name}_radar.json",
+        mime="application/json",
+    )
+    
     st.plotly_chart(fig, use_container_width=True)
     else:
     fig = px.scatter(
