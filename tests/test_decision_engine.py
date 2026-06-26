@@ -690,3 +690,4 @@ def test_decision_result_serializes_enums(
         serialized["raw_components"],
         dict,
     )
+
