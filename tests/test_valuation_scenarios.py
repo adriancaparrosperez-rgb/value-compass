@@ -417,3 +417,4 @@ def test_inverted_scenario_order_generates_warning() -> None:
         in warning.lower()
         for warning in assessment.warnings
     )
+
