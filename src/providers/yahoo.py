@@ -1,4 +1,4 @@
-from future import annotations
+from __future__ import annotations
 
 import logging
 import math
@@ -11,12 +11,13 @@ import yfinance as yf
 from src.models import CompanySnapshot
 from src.providers.base import MarketDataProvider
 
-PROVIDER_NAME = “Yahoo Finance”
+
+PROVIDER_NAME = "Yahoo Finance"
 PROVIDER_SOURCE = (
-“Yahoo Finance (precarga; fuente secundaria)”
+    "Yahoo Finance (precarga; fuente secundaria)"
 )
 
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__)
 
 def _normalize_ticker(
 ticker: Any,
