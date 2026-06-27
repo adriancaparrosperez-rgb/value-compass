@@ -5,14 +5,14 @@ from pathlib import Path
 import json
 import sqlite3
 import pandas as pd
-from src.providers.yahoo import YahooProvider
+from src.services.snapshot_service import SnapshotService
 from src.scoring.engine import score_snapshot
 from src.storage.db import Database
 
 class ScreenerService:
     def __init__(self, settings: dict, db_path: str = "data/value_compass.db"):
         self.settings = settings
-        self.provider = YahooProvider()
+        self.provider = SnapshotService()
         self.db = Database(db_path)
 
     def run(self, universe: str, tickers: list[str]) -> pd.DataFrame:
