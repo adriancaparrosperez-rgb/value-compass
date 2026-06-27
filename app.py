@@ -1,48 +1,62 @@
 from __future__ import annotations
+
 import json
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+
 from src.config import settings, universes
 from src.decision.service import execute_master_decision
-from src.providers.yahoo import YahooProvider
 from src.scoring.engine import score_snapshot
 from src.services.master_analysis_builder import (
     build_master_analysis,
 )
 from src.services.screener import ScreenerService
+from src.services.snapshot_service import SnapshotService
 from src.services.universe_loader import load_universe
 from src.ui.streamlit_decision_renderer import (
     StreamlitDecisionRendererError,
     render_decision_response,
 )
 from src.valuation.dcf import dcf_value
+
+
 st.set_page_config(
     page_title="Value Compass",
     page_icon="🧭",
     layout="wide",
 )
+
+
 CFG = settings()
 UNIVERSES = universes()
 SNAPSHOT_SERVICE = SnapshotService()
+
+
 INDIVIDUAL_RESULT_STATE_KEY = (
     "value_compass_individual_result"
 )
 INDIVIDUAL_ERROR_STATE_KEY = (
     "value_compass_individual_error"
 )
+
+
 def _normalize_ticker(
     value: Any,
 ) -> str:
     if value is None:
         return ""
+
     return str(
         value
     ).strip().upper()
+
+
 def _metric_display_value(
     value: Any,
     *,
@@ -50,6 +64,7 @@ def _metric_display_value(
 ) -> str:
     if value is None:
         return "n.d."
+
     if isinstance(
         value,
         (float, np.floating),
@@ -57,28 +72,35 @@ def _metric_display_value(
         value
     ):
         return "n.d."
+
     return f"{value}{suffix}"
+
+
 def _build_individual_result(
     ticker: str,
 ) -> dict[str, Any]:
     """
     Ejecuta la precarga, el scoring, la construcción del
     análisis maestro y el servicio de decisión.
+
     No modifica session_state. El resultado solo se almacena
     cuando el flujo completo ha terminado.
     """
     normalized_ticker = _normalize_ticker(
         ticker
     )
+
     if not normalized_ticker:
         raise ValueError(
             "El ticker no puede estar vacío."
         )
+
     snapshot_object = (
         SNAPSHOT_SERVICE.get_snapshot(
             normalized_ticker
         )
     )
+
     score_object = score_snapshot(
         snapshot_object,
         CFG["weights"],
@@ -89,20 +111,25 @@ def _build_individual_result(
             "min_confidence_for_entry"
         ],
     )
+
     master_analysis = build_master_analysis(
         snapshot_object,
         score_object,
     )
+
     decision_response = execute_master_decision(
         master_analysis
     )
+
     snapshot_data = snapshot_object.to_dict()
     score_data = score_object.to_dict()
+
     canonical_ticker = _normalize_ticker(
         snapshot_data.get(
             "ticker"
         )
     )
+
     return {
         "requested_ticker": normalized_ticker,
         "canonical_ticker": (
@@ -113,6 +140,8 @@ def _build_individual_result(
         "score": score_data,
         "decision_response": decision_response,
     }
+
+
 def _store_individual_result(
     result: dict[str, Any],
 ) -> None:
@@ -124,10 +153,13 @@ def _store_individual_result(
     ] = deepcopy(
         result
     )
+
     st.session_state.pop(
         INDIVIDUAL_ERROR_STATE_KEY,
         None,
     )
+
+
 def _store_individual_error(
     ticker: str,
     message: str,
@@ -142,6 +174,8 @@ def _store_individual_error(
             message
         ).strip(),
     }
+
+
 def _is_valid_individual_result(
     value: Any,
 ) -> bool:
@@ -169,6 +203,8 @@ def _is_valid_individual_result(
             dict,
         )
     )
+
+
 def _decision_response_json(
     response: dict[str, Any],
 ) -> str:
@@ -197,6 +233,8 @@ def _decision_response_json(
             ensure_ascii=False,
             indent=2,
         )
+
+
 @st.cache_data(
     ttl=86400,
     show_spinner=False,
@@ -204,20 +242,28 @@ def _decision_response_json(
 def get_universe_tickers(
     universe_key: str,
 ) -> tuple[list[str], str]:
-    """Carga los componentes del universo y los conserva 24 horas."""
+    """
+    Carga los componentes del universo y los conserva 24 horas.
+    """
     definition = UNIVERSES[
         universe_key
     ]
+
     return load_universe(
         definition
     )
+
+
 st.title(
     "🧭 Value Compass"
 )
+
 st.caption(
     "Cribado diario de índices + análisis fundamental "
     "y valoración por empresa"
 )
+
+
 with st.sidebar:
     page = st.radio(
         "Módulo",
@@ -228,19 +274,25 @@ with st.sidebar:
             "Metodología y datos",
         ],
     )
+
     st.divider()
+
     st.info(
         "Las señales automáticas son preliminares. "
         "Verifica las cifras materiales en informes oficiales "
         "antes de invertir."
     )
+
+
 # ============================================================
 # RADAR DEL ÍNDICE
 # ============================================================
+
 if page == "Radar del índice":
     st.header(
         "Radar diario del universo"
     )
+
     universe_name = st.selectbox(
         "Universo",
         list(
@@ -255,6 +307,7 @@ if page == "Radar del índice":
             )
         ),
     )
+
     try:
         (
             default_tickers,
@@ -265,10 +318,12 @@ if page == "Radar del índice":
     except Exception as exc:
         default_tickers = []
         universe_source = "error"
+
         st.error(
             "No se pudo cargar el universo seleccionado: "
             f"{exc}"
         )
+
     source_labels = {
         "remote": (
             "componentes actualizados automáticamente"
@@ -283,10 +338,12 @@ if page == "Radar del índice":
             "universo no disponible"
         ),
     }
+
     st.caption(
         f"{len(default_tickers)} valores · "
         f"{source_labels.get(universe_source, universe_source)}"
     )
+
     raw = st.text_area(
         "Tickers (uno por línea o separados por comas)",
         value="\n".join(
@@ -294,6 +351,7 @@ if page == "Radar del índice":
         ),
         height=220,
     )
+
     tickers = list(
         dict.fromkeys(
             item.strip().upper()
@@ -304,15 +362,18 @@ if page == "Radar del índice":
             if item.strip()
         )
     )
+
     st.subheader(
         "Configuración de ejecución"
     )
+
     (
         batch_col_1,
         batch_col_2,
     ) = st.columns(
         2
     )
+
     with batch_col_1:
         batch_size = st.selectbox(
             "Compañías por lote",
@@ -330,12 +391,14 @@ if page == "Radar del índice":
                 "lotes de 25 o 50 compañías."
             ),
         )
+
     maximum_start = max(
         len(
             tickers
         ) - 1,
         0,
     )
+
     with batch_col_2:
         batch_start = st.number_input(
             "Empezar desde la posición",
@@ -344,17 +407,20 @@ if page == "Radar del índice":
             value=0,
             step=batch_size,
         )
+
     batch_start_int = int(
         batch_start
     )
     batch_size_int = int(
         batch_size
     )
+
     selected_tickers = tickers[
         batch_start_int:
         batch_start_int
         + batch_size_int
     ]
+
     batch_end = min(
         batch_start_int
         + len(
@@ -364,6 +430,7 @@ if page == "Radar del índice":
             tickers
         ),
     )
+
     if tickers:
         st.caption(
             f"Se analizarán las posiciones "
@@ -375,6 +442,7 @@ if page == "Radar del índice":
             "No hay tickers disponibles en el universo "
             "seleccionado."
         )
+
     (
         button_col,
         info_col,
@@ -384,17 +452,20 @@ if page == "Radar del índice":
             3,
         ]
     )
+
     with button_col:
         run = st.button(
             "Ejecutar cribado ahora",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         )
+
     with info_col:
         st.caption(
             "La ejecución programada usa la misma lógica y guarda "
             "CSV, Excel, JSON y el histórico en SQLite."
         )
+
     if run:
         if not selected_tickers:
             st.warning(
@@ -411,26 +482,33 @@ if page == "Radar del índice":
                         universe_name,
                         selected_tickers,
                     )
+
                     st.session_state[
                         "screen_df"
                     ] = df_result
+
                     st.session_state[
                         "screen_universe"
                     ] = universe_name
+
                     st.session_state[
                         "screen_batch_start"
                     ] = batch_start_int
+
                 except Exception as exc:
                     st.error(
                         "No se pudo completar el cribado: "
                         f"{exc}"
                     )
+
     df = None
+
     stored_universe = (
         st.session_state.get(
             "screen_universe"
         )
     )
+
     if (
         stored_universe
         == universe_name
@@ -438,16 +516,19 @@ if page == "Radar del índice":
         df = st.session_state.get(
             "screen_df"
         )
+
     if df is None:
         export_path = Path(
             "data/exports"
         )
+
         files = sorted(
             export_path.glob(
                 f"{universe_name}_screening_*.csv"
             ),
             reverse=True,
         )
+
         if files:
             try:
                 df = pd.read_csv(
@@ -460,6 +541,7 @@ if page == "Radar del índice":
                     "No se pudo cargar el último archivo guardado: "
                     f"{exc}"
                 )
+
     if (
         df is None
         or df.empty
@@ -469,6 +551,7 @@ if page == "Radar del índice":
         )
     else:
         df = df.copy()
+
         numeric_columns = [
             "price",
             "global_score",
@@ -481,6 +564,7 @@ if page == "Radar del índice":
             "confidence",
             "market_cap",
         ]
+
         for column in numeric_columns:
             if column in df.columns:
                 df[
@@ -491,6 +575,7 @@ if page == "Radar del índice":
                     ],
                     errors="coerce",
                 )
+
         if (
             "recommendation"
             not in df.columns
@@ -498,6 +583,7 @@ if page == "Radar del índice":
             df[
                 "recommendation"
             ] = "SIN CLASIFICAR"
+
         entries = df[
             df[
                 "recommendation"
@@ -511,6 +597,7 @@ if page == "Radar del índice":
                 ]
             )
         ]
+
         (
             metric_1,
             metric_2,
@@ -519,18 +606,21 @@ if page == "Radar del índice":
         ) = st.columns(
             4
         )
+
         metric_1.metric(
             "Compañías analizadas",
             len(
                 df
             ),
         )
+
         metric_2.metric(
             "Entradas",
             len(
                 entries
             ),
         )
+
         global_score_mean = (
             df[
                 "global_score"
@@ -541,6 +631,7 @@ if page == "Radar del índice":
             )
             else np.nan
         )
+
         confidence_mean = (
             df[
                 "confidence"
@@ -551,6 +642,7 @@ if page == "Radar del índice":
             )
             else np.nan
         )
+
         metric_3.metric(
             "Score medio",
             (
@@ -561,6 +653,7 @@ if page == "Radar del índice":
                 else "n.d."
             ),
         )
+
         metric_4.metric(
             "Confianza media",
             (
@@ -571,6 +664,7 @@ if page == "Radar del índice":
                 else "n.d."
             ),
         )
+
         desired_display_columns = [
             "ticker",
             "name",
@@ -585,18 +679,20 @@ if page == "Radar del índice":
             "confidence",
             "recommendation",
         ]
+
         display_columns = [
             column
             for column
             in desired_display_columns
             if column in df.columns
         ]
+
         if display_columns:
             st.dataframe(
                 df[
                     display_columns
                 ],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
         else:
@@ -604,12 +700,14 @@ if page == "Radar del índice":
                 "El resultado no contiene columnas disponibles "
                 "para mostrar."
             )
+
         required_chart_columns = {
             "ticker",
             "valuation",
             "quality",
             "global_score",
         }
+
         if not (
             required_chart_columns.issubset(
                 df.columns
@@ -620,6 +718,7 @@ if page == "Radar del índice":
                     df.columns
                 )
             )
+
             st.warning(
                 "No se puede generar el mapa porque faltan "
                 f"estas columnas: {', '.join(missing_columns)}."
@@ -632,6 +731,7 @@ if page == "Radar del índice":
                     "global_score",
                 ]
             ).copy()
+
             if radar_df.empty:
                 st.warning(
                     "No hay suficientes datos válidos para mostrar "
@@ -645,6 +745,7 @@ if page == "Radar del índice":
                     radar_df[
                         "market_cap"
                     ] = np.nan
+
                 radar_df[
                     "market_cap"
                 ] = (
@@ -662,6 +763,7 @@ if page == "Radar del índice":
                         np.nan,
                     )
                 )
+
                 valid_market_caps = radar_df.loc[
                     (
                         radar_df[
@@ -676,6 +778,7 @@ if page == "Radar del índice":
                     ),
                     "market_cap",
                 ]
+
                 fallback_market_cap = (
                     float(
                         valid_market_caps.median()
@@ -685,6 +788,7 @@ if page == "Radar del índice":
                     )
                     else 1.0
                 )
+
                 radar_df[
                     "market_cap"
                 ] = (
@@ -698,16 +802,19 @@ if page == "Radar del índice":
                         lower=1.0
                     )
                 )
+
                 minimum_cap = float(
                     radar_df[
                         "market_cap"
                     ].min()
                 )
+
                 maximum_cap = float(
                     radar_df[
                         "market_cap"
                     ].max()
                 )
+
                 if (
                     maximum_cap
                     > minimum_cap
@@ -715,9 +822,11 @@ if page == "Radar del índice":
                     log_minimum = np.log10(
                         minimum_cap
                     )
+
                     log_maximum = np.log10(
                         maximum_cap
                     )
+
                     radar_df[
                         "marker_size"
                     ] = (
@@ -740,6 +849,7 @@ if page == "Radar del índice":
                     radar_df[
                         "marker_size"
                     ] = 20.0
+
                 fig = px.scatter(
                     radar_df,
                     x="valuation",
@@ -767,6 +877,7 @@ if page == "Radar del índice":
                         ),
                     },
                 )
+
                 fig.update_traces(
                     hovertemplate=(
                         "<b>%{hovertext}</b><br>"
@@ -779,21 +890,25 @@ if page == "Radar del índice":
                         "<extra></extra>"
                     )
                 )
+
                 fig.update_layout(
                     legend_title_text=(
                         "Score global"
                     ),
                 )
+
                 st.plotly_chart(
                     fig,
-                    use_container_width=True,
+                    width="stretch",
                 )
+
         (
             download_col_1,
             download_col_2,
         ) = st.columns(
             2
         )
+
         with download_col_1:
             st.download_button(
                 label="Descargar CSV",
@@ -807,8 +922,9 @@ if page == "Radar del índice":
                     f"{batch_start_int + 1}_{batch_end}.csv"
                 ),
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
+
         with download_col_2:
             st.download_button(
                 label="Descargar JSON",
@@ -822,27 +938,34 @@ if page == "Radar del índice":
                     f"{batch_start_int + 1}_{batch_end}.json"
                 ),
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
+
+
 # ============================================================
 # ANÁLISIS INDIVIDUAL
 # ============================================================
+
 elif page == "Análisis individual":
     st.header(
         "Análisis individual"
     )
+
     st.caption(
         "El radar realiza una primera clasificación. "
         "La decisión maestra aplica después los controles "
         "de calidad de datos, los gates y las reglas "
         "de prudencia."
     )
+
     stored_result = (
         st.session_state.get(
             INDIVIDUAL_RESULT_STATE_KEY
         )
     )
+
     default_ticker = "ITX.MC"
+
     if _is_valid_individual_result(
         stored_result
     ):
@@ -853,10 +976,12 @@ elif page == "Análisis individual":
                 )
             )
         )
+
         if stored_requested_ticker:
             default_ticker = (
                 stored_requested_ticker
             )
+
     with st.form(
         "individual_analysis_form",
         clear_on_submit=False,
@@ -869,18 +994,21 @@ elif page == "Análisis individual":
                 "Finance, por ejemplo ITX.MC, META o ALV.DE."
             ),
         )
+
         submitted = (
             st.form_submit_button(
                 "Ejecutar análisis completo",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             )
         )
+
     requested_ticker = (
         _normalize_ticker(
             ticker_input
         )
     )
+
     if submitted:
         if not requested_ticker:
             _store_individual_error(
@@ -898,12 +1026,15 @@ elif page == "Análisis individual":
                             requested_ticker
                         )
                     )
+
                 _store_individual_result(
                     new_result
                 )
+
                 stored_result = deepcopy(
                     new_result
                 )
+
             except ValueError as exc:
                 _store_individual_error(
                     requested_ticker,
@@ -911,6 +1042,7 @@ elif page == "Análisis individual":
                         exc
                     ),
                 )
+
             except Exception as exc:
                 _store_individual_error(
                     requested_ticker,
@@ -919,11 +1051,13 @@ elif page == "Análisis individual":
                         f"el análisis de {requested_ticker}: {exc}"
                     ),
                 )
+
     stored_error = (
         st.session_state.get(
             INDIVIDUAL_ERROR_STATE_KEY
         )
     )
+
     if isinstance(
         stored_error,
         dict,
@@ -935,12 +1069,14 @@ elif page == "Análisis individual":
                 )
             )
         )
+
         error_message = str(
             stored_error.get(
                 "message",
                 "",
             )
         ).strip()
+
         if (
             error_message
             and (
@@ -952,11 +1088,13 @@ elif page == "Análisis individual":
             st.error(
                 error_message
             )
+
     valid_stored_result = (
         _is_valid_individual_result(
             stored_result
         )
     )
+
     if not valid_stored_result:
         st.info(
             "Introduce un ticker y pulsa "
@@ -970,6 +1108,7 @@ elif page == "Análisis individual":
                 )
             )
         )
+
         stored_canonical_ticker = (
             _normalize_ticker(
                 stored_result.get(
@@ -977,6 +1116,7 @@ elif page == "Análisis individual":
                 )
             )
         )
+
         result_matches_input = (
             bool(
                 requested_ticker
@@ -987,16 +1127,19 @@ elif page == "Análisis individual":
                 stored_canonical_ticker,
             }
         )
+
         if not result_matches_input:
             stored_label = (
                 stored_requested_ticker
                 or stored_canonical_ticker
                 or "otro ticker"
             )
+
             requested_label = (
                 requested_ticker
                 or "otro ticker"
             )
+
             st.info(
                 "El último resultado guardado corresponde a "
                 f"{stored_label}. Pulsa "
@@ -1009,16 +1152,19 @@ elif page == "Análisis individual":
                     "snapshot"
                 ]
             )
+
             company_score = deepcopy(
                 stored_result[
                     "score"
                 ]
             )
+
             decision_response = deepcopy(
                 stored_result[
                     "decision_response"
                 ]
             )
+
             company_name = str(
                 snapshot.get(
                     "name"
@@ -1027,6 +1173,7 @@ elif page == "Análisis individual":
                 or stored_requested_ticker
                 or "Empresa"
             ).strip()
+
             company_ticker = (
                 _normalize_ticker(
                     snapshot.get(
@@ -1036,7 +1183,9 @@ elif page == "Análisis individual":
                 or stored_canonical_ticker
                 or stored_requested_ticker
             )
+
             st.divider()
+
             (
                 master_tab,
                 radar_tab,
@@ -1048,9 +1197,11 @@ elif page == "Análisis individual":
                     "Datos y trazabilidad",
                 ]
             )
+
             # -----------------------------------------------
             # DECISIÓN MAESTRA
             # -----------------------------------------------
+
             with master_tab:
                 st.caption(
                     "Resultado de los controles maestros. "
@@ -1058,6 +1209,7 @@ elif page == "Análisis individual":
                     "insuficientes impiden emitir una compra "
                     "automática."
                 )
+
                 debug_mode = st.checkbox(
                     "Mostrar información técnica",
                     value=False,
@@ -1070,6 +1222,7 @@ elif page == "Análisis individual":
                         "depuración."
                     ),
                 )
+
                 try:
                     render_decision_response(
                         decision_response,
@@ -1089,34 +1242,42 @@ elif page == "Análisis individual":
                         "mostrar la decisión maestra: "
                         f"{exc}"
                     )
+
             # -----------------------------------------------
             # RADAR PRELIMINAR
             # -----------------------------------------------
+
             with radar_tab:
                 st.subheader(
                     f"{company_name} · {company_ticker}"
                 )
+
                 st.warning(
                     "Este bloque es un cribado preliminar. "
                     "No sustituye la decisión maestra."
                 )
+
                 metric_columns = st.columns(
                     4
                 )
+
                 price = snapshot.get(
                     "price"
                 )
+
                 currency = str(
                     snapshot.get(
                         "currency"
                     )
                     or ""
                 ).strip()
+
                 price_display = (
                     _metric_display_value(
                         price
                     )
                 )
+
                 if (
                     price_display
                     != "n.d."
@@ -1125,12 +1286,14 @@ elif page == "Análisis individual":
                     price_display = (
                         f"{price_display} {currency}"
                     )
+
                 metric_columns[
                     0
                 ].metric(
                     "Precio",
                     price_display,
                 )
+
                 metric_columns[
                     1
                 ].metric(
@@ -1141,16 +1304,19 @@ elif page == "Análisis individual":
                         )
                     ),
                 )
+
                 confidence = (
                     company_score.get(
                         "confidence"
                     )
                 )
+
                 confidence_suffix = (
                     "%"
                     if confidence is not None
                     else ""
                 )
+
                 metric_columns[
                     2
                 ].metric(
@@ -1162,6 +1328,7 @@ elif page == "Análisis individual":
                         ),
                     ),
                 )
+
                 metric_columns[
                     3
                 ].metric(
@@ -1177,17 +1344,20 @@ elif page == "Análisis individual":
                         "ni a la decisión maestra."
                     ),
                 )
+
                 rationale = (
                     company_score.get(
                         "rationale"
                     )
                 )
+
                 if rationale:
                     st.write(
                         str(
                             rationale
                         )
                     )
+
                 score_dimensions = {
                     "Valoración": (
                         company_score.get(
@@ -1230,6 +1400,7 @@ elif page == "Análisis individual":
                         )
                     ),
                 }
+
                 score_df = pd.DataFrame(
                     {
                         "Dimensión": list(
@@ -1240,6 +1411,7 @@ elif page == "Análisis individual":
                         ),
                     }
                 )
+
                 score_df[
                     "Score"
                 ] = pd.to_numeric(
@@ -1248,6 +1420,7 @@ elif page == "Análisis individual":
                     ],
                     errors="coerce",
                 )
+
                 score_df = (
                     score_df.replace(
                         [
@@ -1262,6 +1435,7 @@ elif page == "Análisis individual":
                         ]
                     )
                 )
+
                 score_df[
                     "Score"
                 ] = score_df[
@@ -1270,6 +1444,7 @@ elif page == "Análisis individual":
                     lower=0.0,
                     upper=100.0,
                 )
+
                 if score_df.empty:
                     st.info(
                         "No hay puntuaciones suficientes "
@@ -1289,51 +1464,62 @@ elif page == "Análisis individual":
                             "por dimensión"
                         ),
                     )
+
                     score_figure.update_layout(
                         showlegend=False,
                     )
+
                     st.plotly_chart(
                         score_figure,
-                        use_container_width=True,
+                        width="stretch",
                     )
+
             # -----------------------------------------------
             # DATOS Y TRAZABILIDAD
             # -----------------------------------------------
+
             with data_tab:
                 st.subheader(
                     "Datos utilizados en la precarga"
                 )
+
                 source_name = str(
                     snapshot.get(
                         "source"
                     )
                     or "No disponible"
                 )
+
                 fetched_at = str(
                     snapshot.get(
                         "fetched_at"
                     )
                     or "No disponible"
                 )
+
                 (
                     source_col,
                     date_col,
                 ) = st.columns(
                     2
                 )
+
                 source_col.metric(
                     "Fuente de precarga",
                     source_name,
                 )
+
                 date_col.metric(
                     "Fecha de obtención",
                     fetched_at,
                 )
+
                 snapshot_warnings = (
                     snapshot.get(
                         "warnings"
                     )
                 )
+
                 if (
                     isinstance(
                         snapshot_warnings,
@@ -1344,15 +1530,18 @@ elif page == "Análisis individual":
                     st.warning(
                         "La precarga contiene advertencias."
                     )
+
                     for warning in snapshot_warnings:
                         st.write(
                             f"• {warning}"
                         )
+
                 critical_missing_fields = (
                     snapshot.get(
                         "critical_missing_fields"
                     )
                 )
+
                 if (
                     isinstance(
                         critical_missing_fields,
@@ -1363,13 +1552,15 @@ elif page == "Análisis individual":
                     st.error(
                         "Faltan campos críticos en la precarga."
                     )
+
                     for field_name in (
                         critical_missing_fields
                     ):
                         st.write(
                             f"• {field_name}"
                         )
-                st.dataframe(
+
+                snapshot_table = (
                     pd.DataFrame(
                         [
                             snapshot,
@@ -1380,9 +1571,59 @@ elif page == "Análisis individual":
                         columns={
                             0: "Valor",
                         }
-                    ),
-                    use_container_width=True,
+                    )
+                    .reset_index()
+                    .rename(
+                        columns={
+                            "index": "Campo",
+                        }
+                    )
                 )
+
+                snapshot_table[
+                    "Campo"
+                ] = snapshot_table[
+                    "Campo"
+                ].astype(
+                    str
+                )
+
+                snapshot_table[
+                    "Valor"
+                ] = snapshot_table[
+                    "Valor"
+                ].apply(
+                    lambda value: (
+                        json.dumps(
+                            value,
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                        if isinstance(
+                            value,
+                            (
+                                dict,
+                                list,
+                                tuple,
+                                set,
+                            ),
+                        )
+                        else (
+                            "No disponible"
+                            if value is None
+                            else str(
+                                value
+                            )
+                        )
+                    )
+                )
+
+                st.dataframe(
+                    snapshot_table,
+                    width="stretch",
+                    hide_index=True,
+                )
+
                 st.download_button(
                     label=(
                         "Descargar respuesta de la "
@@ -1396,15 +1637,19 @@ elif page == "Análisis individual":
                         "master_decision.json"
                     ),
                     mime="application/json",
-                    use_container_width=True,
+                    width="stretch",
                 )
+
+
 # ============================================================
 # VALORACIÓN DCF
 # ============================================================
+
 elif page == "Valoración DCF":
     st.header(
         "DCF configurable"
     )
+
     (
         c1,
         c2,
@@ -1412,10 +1657,12 @@ elif page == "Valoración DCF":
     ) = st.columns(
         3
     )
+
     fcf0 = c1.number_input(
         "FCF normalizado inicial",
         value=1000.0,
     )
+
     growth = (
         c2.number_input(
             "Crecimiento anual",
@@ -1424,12 +1671,14 @@ elif page == "Valoración DCF":
         )
         / 100
     )
+
     years = c3.slider(
         "Años explícitos",
         3,
         10,
         5,
     )
+
     (
         c4,
         c5,
@@ -1437,6 +1686,7 @@ elif page == "Valoración DCF":
     ) = st.columns(
         3
     )
+
     wacc = (
         c4.number_input(
             "WACC",
@@ -1445,6 +1695,7 @@ elif page == "Valoración DCF":
         )
         / 100
     )
+
     terminal = (
         c5.number_input(
             "Crecimiento terminal",
@@ -1453,15 +1704,18 @@ elif page == "Valoración DCF":
         )
         / 100
     )
+
     net_debt = c6.number_input(
         "Deuda neta",
         value=0.0,
     )
+
     shares = st.number_input(
         "Acciones diluidas",
         value=100.0,
         min_value=0.000001,
     )
+
     if st.button(
         "Calcular valor intrínseco",
         type="primary",
@@ -1476,6 +1730,7 @@ elif page == "Valoración DCF":
                 net_debt,
                 shares,
             )
+
             (
                 result_col_1,
                 result_col_2,
@@ -1483,17 +1738,21 @@ elif page == "Valoración DCF":
             ) = st.columns(
                 3
             )
+
             result_col_1.metric(
                 "Enterprise value",
                 f"{result.enterprise_value:,.0f}",
             )
+
             result_col_2.metric(
                 "Equity value",
                 f"{result.equity_value:,.0f}",
             )
+
             value_per_share = (
                 result.value_per_share
             )
+
             result_col_3.metric(
                 "Valor por acción",
                 (
@@ -1505,6 +1764,7 @@ elif page == "Valoración DCF":
                     else "n.d."
                 ),
             )
+
             projected_fcf_df = (
                 pd.DataFrame(
                     {
@@ -1523,30 +1783,38 @@ elif page == "Valoración DCF":
                     "Año"
                 )
             )
+
             st.line_chart(
                 projected_fcf_df,
             )
+
         except ValueError as exc:
             st.error(
                 str(
                     exc
                 )
             )
+
         except Exception as exc:
             st.error(
                 "No se pudo completar la valoración: "
                 f"{exc}"
             )
+
+
 # ============================================================
 # METODOLOGÍA
 # ============================================================
+
 else:
     st.header(
         "Metodología y datos"
     )
+
     st.markdown(
         """
 ### Dos niveles de análisis
+
 1. El radar diario recorre el universo seleccionado mediante
    una precarga homogénea y un scoring provisional.
 2. El análisis individual transforma esa precarga en una
@@ -1555,7 +1823,9 @@ else:
    gates, valoración, moat y reglas de prudencia.
 4. La valoración detallada debe completarse con fuentes
    oficiales antes de considerar una entrada.
+
 ### Principios metodológicos
+
 - Separación entre calidad empresarial y precio.
 - Separación entre radar preliminar y decisión maestra.
 - Evaluación de la creación de valor por acción.
@@ -1568,6 +1838,7 @@ else:
 - Revisión de cifras materiales en fuentes oficiales.
 """
     )
+
     st.code(
         "streamlit run app.py",
         language="bash",
