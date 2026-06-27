@@ -28,6 +28,7 @@ st.set_page_config(
 )
 CFG = settings()
 UNIVERSES = universes()
+SNAPSHOT_SERVICE = SnapshotService()
 INDIVIDUAL_RESULT_STATE_KEY = (
     "value_compass_individual_result"
 )
@@ -74,7 +75,7 @@ def _build_individual_result(
             "El ticker no puede estar vacío."
         )
     snapshot_object = (
-        YahooProvider().get_snapshot(
+        SNAPSHOT_SERVICE.get_snapshot(
             normalized_ticker
         )
     )
