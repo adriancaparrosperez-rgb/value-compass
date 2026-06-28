@@ -807,3 +807,4 @@ def test_capital_allocation_warning_is_explicit() -> None:
         in warning.casefold()
         for warning in card.warnings
     )
+
