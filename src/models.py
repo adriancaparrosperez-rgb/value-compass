@@ -383,6 +383,7 @@ class CompanySnapshot:
 
     data_quality: float = 0.0
     coverage_score: float = 0.0
+    validity_score: float = 0.0
     freshness_score: float = 0.0
     consistency_score: float = 0.0
     source_quality_score: float = 0.0
