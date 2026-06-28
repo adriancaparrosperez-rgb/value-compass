@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from src.models import CompanySnapshot
+from src.models import CompanySnapshot, ScoreCard
 from src.scoring.engine import (
     RADAR_CANDIDATE,
     RADAR_DISCARD,
@@ -121,14 +121,26 @@ def run_scoring(
     thresholds: dict[str, Any] | None = None,
     min_confidence: float = 55.0,
     min_coverage: float = 50.0,
-):
+) -> ScoreCard:
     """
     Ejecuta el scoring con una configuración homogénea.
     """
+    selected_weights = (
+        DEFAULT_WEIGHTS
+        if weights is None
+        else weights
+    )
+
+    selected_thresholds = (
+        DEFAULT_THRESHOLDS
+        if thresholds is None
+        else thresholds
+    )
+
     return score_snapshot(
         snapshot,
-        weights or DEFAULT_WEIGHTS,
-        thresholds or DEFAULT_THRESHOLDS,
+        selected_weights,
+        selected_thresholds,
         min_confidence=min_confidence,
         min_coverage=min_coverage,
     )
@@ -144,9 +156,7 @@ def test_complete_snapshot_generates_reliable_radar_result() -> None:
         build_snapshot()
     )
 
-    assert card.recommendation in (
-        VALID_RADAR_RECOMMENDATIONS
-    )
+    assert card.recommendation in VALID_RADAR_RECOMMENDATIONS
     assert card.overall_coverage == 100.0
     assert card.confidence >= 55.0
     assert not card.missing_metrics
@@ -365,6 +375,71 @@ def test_yahoo_percentage_debt_to_equity_is_normalized() -> None:
     )
 
 
+def test_net_cash_requires_cash_and_debt() -> None:
+    card = run_scoring(
+        build_snapshot(
+            total_cash=20_000.0,
+            total_debt=None,
+        )
+    )
+
+    assert (
+        "balance.net_cash_to_market_cap"
+        in card.missing_metrics
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "total_cash",
+        "total_debt",
+    ),
+    [
+        (
+            None,
+            10_000.0,
+        ),
+        (
+            20_000.0,
+            None,
+        ),
+        (
+            None,
+            None,
+        ),
+    ],
+)
+def test_incomplete_cash_or_debt_prevents_net_cash_scoring(
+    total_cash: float | None,
+    total_debt: float | None,
+) -> None:
+    card = run_scoring(
+        build_snapshot(
+            total_cash=total_cash,
+            total_debt=total_debt,
+        )
+    )
+
+    assert (
+        "balance.net_cash_to_market_cap"
+        in card.missing_metrics
+    )
+
+
+def test_complete_cash_and_debt_enable_net_cash_scoring() -> None:
+    card = run_scoring(
+        build_snapshot(
+            total_cash=20_000.0,
+            total_debt=10_000.0,
+        )
+    )
+
+    assert (
+        "balance.net_cash_to_market_cap"
+        not in card.missing_metrics
+    )
+
+
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
@@ -376,9 +451,7 @@ def test_legacy_threshold_names_remain_supported() -> None:
         thresholds=LEGACY_THRESHOLDS,
     )
 
-    assert card.recommendation in (
-        VALID_RADAR_RECOMMENDATIONS
-    )
+    assert card.recommendation in VALID_RADAR_RECOMMENDATIONS
 
 
 def test_invalid_threshold_order_uses_defaults() -> None:
@@ -551,31 +624,9 @@ def test_capital_allocation_is_explicitly_preliminary() -> None:
 # ============================================================
 # DEUDA TÉCNICA METODOLÓGICA
 #
-# Estos tests documentan comportamientos que deben corregirse.
-# Se marcan como xfail para mantener la integración continua
-# operativa hasta modificar models.py y scoring/engine.py.
+# Estos tres tests documentan comportamientos todavía pendientes.
+# Permanecen como xfail hasta corregir models.py y engine.py.
 # ============================================================
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "La caja neta se calcula actualmente aunque falte "
-        "la deuda. Debe requerir caja y deuda."
-    ),
-)
-def test_net_cash_requires_cash_and_debt() -> None:
-    card = run_scoring(
-        build_snapshot(
-            total_cash=20_000.0,
-            total_debt=None,
-        )
-    )
-
-    assert (
-        "balance.net_cash_to_market_cap"
-        in card.missing_metrics
-    )
 
 
 @pytest.mark.xfail(
