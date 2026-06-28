@@ -44,6 +44,12 @@ MetricSpec: TypeAlias = tuple[
     float,
 ]
 
+MetricValue: TypeAlias = (
+    float
+    | None
+    | MetricSpec
+)
+
 
 def _number(
     value: Any,
@@ -104,16 +110,18 @@ def _linear_score(
     """
     Convierte una métrica en una puntuación lineal 0–100.
 
-    Cuando reverse=True, un valor inferior obtiene mejor
-    puntuación. Cuando require_positive=True, los valores
-    iguales o inferiores a cero se consideran no evaluables.
+    Un valor ausente devuelve None. Cuando reverse=True, un
+    valor inferior obtiene una puntuación superior.
     """
     numeric_value = _number(value)
 
     if numeric_value is None:
         return None
 
-    if require_positive and numeric_value <= 0:
+    if (
+        require_positive
+        and numeric_value <= 0
+    ):
         return None
 
     if (
@@ -151,10 +159,9 @@ def _safe_ratio(
     denominator_must_be_positive: bool = False,
 ) -> float | None:
     """
-    Calcula una ratio con validación prudente.
+    Calcula una ratio únicamente con valores finitos.
 
-    No interpreta valores ausentes como cero y permite exigir
-    numerador o denominador estrictamente positivos.
+    No interpreta datos ausentes como cero.
     """
     normalized_numerator = _number(
         numerator
@@ -200,7 +207,7 @@ def _safe_difference(
     subtrahend: Any,
 ) -> float | None:
     """
-    Calcula una diferencia solo cuando ambos valores existen.
+    Calcula una diferencia solo cuando existen ambos valores.
     """
     normalized_minuend = _number(
         minuend
@@ -236,8 +243,7 @@ def _normalize_debt_to_equity(
     Normaliza debt-to-equity con prudencia.
 
     Yahoo suele expresar esta ratio como porcentaje. El ajuste
-    heurístico se conserva por compatibilidad, pero genera una
-    advertencia para garantizar trazabilidad.
+    heurístico genera una advertencia para dejar trazabilidad.
     """
     numeric_value = _number(value)
 
@@ -281,9 +287,8 @@ def _analyst_upside(
     """
     Calcula el potencial frente al precio objetivo.
 
-    La señal solo se utiliza cuando existen al menos tres
-    analistas, para reducir el riesgo de depender de una
-    estimación individual o poco representativa.
+    La señal se utiliza únicamente cuando existen al menos tres
+    analistas, para evitar depender de una estimación aislada.
     """
     target = _number(
         snapshot.analyst_target
@@ -328,7 +333,7 @@ def _analyst_upside(
 def _dimension_result(
     metrics: Mapping[
         str,
-        MetricSpec,
+        MetricValue,
     ],
 ) -> tuple[
     float,
@@ -336,15 +341,69 @@ def _dimension_result(
     list[str],
 ]:
     """
-    Calcula una dimensión mediante pesos internos.
+    Calcula puntuación y cobertura de una dimensión.
 
-    La cobertura también se pondera. Una métrica importante
-    ausente reduce más la cobertura que una señal secundaria.
+    Admite el contrato histórico:
 
-    El 50 se conserva como representación interna de una
-    dimensión totalmente no evaluada, por compatibilidad con
-    ScoreCard. Esa dimensión no participa en el score global.
+        {"metric_a": 80.0, "metric_b": None}
+
+    y el contrato ponderado:
+
+        {"metric_a": (80.0, 0.70), "metric_b": (None, 0.30)}
+
+    Las métricas ausentes no reciben una puntuación neutral.
     """
+    if not metrics:
+        return (
+            50.0,
+            0.0,
+            [],
+        )
+
+    normalized_metrics: dict[
+        str,
+        MetricSpec,
+    ] = {}
+
+    for (
+        metric_name,
+        metric_value,
+    ) in metrics.items():
+        if (
+            isinstance(
+                metric_value,
+                tuple,
+            )
+            and len(metric_value) == 2
+        ):
+            raw_score = metric_value[0]
+            raw_weight = _number(
+                metric_value[1]
+            )
+
+            metric_weight = (
+                raw_weight
+                if (
+                    raw_weight is not None
+                    and raw_weight > 0
+                )
+                else 0.0
+            )
+
+            normalized_metrics[
+                metric_name
+            ] = (
+                raw_score,
+                metric_weight,
+            )
+        else:
+            normalized_metrics[
+                metric_name
+            ] = (
+                metric_value,
+                1.0,
+            )
+
     valid_metrics = {
         metric_name: (
             score,
@@ -353,11 +412,8 @@ def _dimension_result(
         for metric_name, (
             score,
             metric_weight,
-        ) in metrics.items()
-        if (
-            _number(metric_weight) is not None
-            and float(metric_weight) > 0
-        )
+        ) in normalized_metrics.items()
+        if metric_weight > 0
     }
 
     if not valid_metrics:
@@ -459,7 +515,10 @@ def _normalize_weights(
     Valida y normaliza los pesos de las dimensiones.
     """
     warnings: list[str] = []
-    raw_weights: dict[str, float] = {}
+    raw_weights: dict[
+        str,
+        float,
+    ] = {}
 
     for dimension in DIMENSION_NAMES:
         raw_value = _number(
@@ -469,7 +528,10 @@ def _normalize_weights(
         )
 
         if raw_value is None:
-            raw_weights[dimension] = 0.0
+            raw_weights[
+                dimension
+            ] = 0.0
+
             warnings.append(
                 "No se proporcionó un peso válido para "
                 f"{dimension}."
@@ -477,14 +539,19 @@ def _normalize_weights(
             continue
 
         if raw_value < 0:
-            raw_weights[dimension] = 0.0
+            raw_weights[
+                dimension
+            ] = 0.0
+
             warnings.append(
                 f"El peso de {dimension} era negativo "
                 "y se ha descartado."
             )
             continue
 
-        raw_weights[dimension] = raw_value
+        raw_weights[
+            dimension
+        ] = raw_value
 
     total_weight = sum(
         raw_weights.values()
@@ -670,13 +737,13 @@ def _observed_global_score(
     """
     Calcula el score con las dimensiones realmente observadas.
 
-    Los pesos se renormalizan entre dimensiones con cobertura
-    superior a cero. La insuficiencia de datos se refleja por
-    separado mediante cobertura, confianza y gates.
+    Las dimensiones sin datos no aportan 50 puntos artificiales.
+    Sus pesos se excluyen y los restantes se renormalizan.
     """
     observed_dimensions = [
         dimension
-        for dimension in DIMENSION_NAMES
+        for dimension
+        in DIMENSION_NAMES
         if (
             dimension_coverage.get(
                 dimension,
@@ -725,120 +792,28 @@ def _observed_global_score(
     )
 
 
-def _provider_quality(
-    snapshot: CompanySnapshot,
-) -> float:
-    """
-    Consolida calidad, validez y consistencia disponibles.
-
-    Los subindicadores con valor cero se omiten porque en el
-    modelo actual cero también actúa como valor por defecto.
-    """
-    components: list[
-        tuple[
-            float,
-            float,
-        ]
-    ] = []
-
-    data_quality = _number(
-        snapshot.data_quality
-    )
-
-    if data_quality is not None:
-        components.append(
-            (
-                _bounded_score(
-                    data_quality
-                ),
-                0.50,
-            )
-        )
-
-    validity = _number(
-        snapshot.validity_score
-    )
-
-    if validity is not None and validity > 0:
-        components.append(
-            (
-                _bounded_score(
-                    validity
-                ),
-                0.25,
-            )
-        )
-
-    consistency = _number(
-        snapshot.consistency_score
-    )
-
-    if (
-        consistency is not None
-        and consistency > 0
-    ):
-        components.append(
-            (
-                _bounded_score(
-                    consistency
-                ),
-                0.25,
-            )
-        )
-
-    if not components:
-        return 0.0
-
-    total_weight = sum(
-        weight
-        for _, weight
-        in components
-    )
-
-    return round(
-        sum(
-            score * weight
-            for score, weight
-            in components
-        )
-        / total_weight,
-        1,
-    )
-
-
 def _effective_confidence(
     snapshot: CompanySnapshot,
     overall_coverage: float,
 ) -> float:
     """
-    Combina calidad de datos y cobertura mediante media armónica.
+    Combina calidad principal del proveedor y cobertura.
 
-    La media armónica penaliza especialmente que uno de los dos
-    componentes sea bajo y evita que una fuente excelente o una
-    cobertura elevada oculten una debilidad material.
+    La calidad de datos no forma parte del riesgo empresarial;
+    afecta exclusivamente a la confianza del resultado.
     """
-    provider_quality = _provider_quality(
-        snapshot
-    )
-    normalized_coverage = _bounded_score(
-        overall_coverage
+    provider_quality = _bounded_score(
+        snapshot.data_quality
     )
 
-    if (
-        provider_quality <= 0
-        or normalized_coverage <= 0
-    ):
-        confidence = 0.0
-    else:
-        confidence = (
-            2.0
-            * provider_quality
-            * normalized_coverage
-            / (
-                provider_quality
-                + normalized_coverage
-            )
+    confidence = (
+        0.65
+        * provider_quality
+        + 0.35
+        * _bounded_score(
+            overall_coverage
         )
+    )
 
     if snapshot.errors:
         confidence = min(
@@ -867,10 +842,6 @@ def _radar_recommendation(
     balance: float,
     confidence: float,
     overall_coverage: float,
-    dimension_coverage: Mapping[
-        str,
-        float,
-    ],
     thresholds: Mapping[
         str,
         float,
@@ -878,12 +849,17 @@ def _radar_recommendation(
     min_confidence: float,
     min_coverage: float,
     snapshot: CompanySnapshot,
+    dimension_coverage: Mapping[
+        str,
+        float,
+    ]
+    | None = None,
 ) -> str:
     """
     Clasifica una empresa para priorizar análisis posterior.
 
-    Es un resultado de radar, no una recomendación definitiva
-    de inversión.
+    dimension_coverage es opcional para mantener compatibilidad
+    con llamadas anteriores a esta función auxiliar.
     """
     if (
         snapshot.errors
@@ -894,14 +870,24 @@ def _radar_recommendation(
     ):
         return RADAR_UNRELIABLE
 
+    effective_dimension_coverage = (
+        dimension_coverage
+        if dimension_coverage is not None
+        else {
+            "valuation": 100.0,
+            "balance": 100.0,
+        }
+    )
+
     valuation_coverage = (
-        dimension_coverage.get(
+        effective_dimension_coverage.get(
             "valuation",
             0.0,
         )
     )
+
     balance_coverage = (
-        dimension_coverage.get(
+        effective_dimension_coverage.get(
             "balance",
             0.0,
         )
@@ -975,8 +961,11 @@ def _build_rationale(
     Construye la explicación usando solo dimensiones evaluadas.
     """
     observed_parts = {
-        dimension: parts[dimension]
-        for dimension in DIMENSION_NAMES
+        dimension: parts[
+            dimension
+        ]
+        for dimension
+        in DIMENSION_NAMES
         if dimension_coverage.get(
             dimension,
             0.0,
@@ -1084,6 +1073,7 @@ def _deduplicate_strings(
         seen.add(
             comparison_key
         )
+
         result.append(
             normalized
         )
@@ -1108,7 +1098,8 @@ def score_snapshot(
     Ejecuta el precribado cuantitativo de una compañía.
 
     El resultado permite priorizar qué empresas merecen un
-    análisis maestro completo.
+    análisis maestro completo. No constituye por sí solo una
+    recomendación definitiva de inversión.
     """
     if not isinstance(
         snapshot,
@@ -1141,6 +1132,7 @@ def score_snapshot(
             default=DEFAULT_MIN_CONFIDENCE,
         )
     )
+
     normalized_min_coverage = (
         _bounded_score(
             min_coverage,
@@ -1169,11 +1161,21 @@ def score_snapshot(
         snapshot.debt_to_equity
     )
 
-    fcf_conversion = _safe_ratio(
-        snapshot.free_cash_flow,
-        snapshot.net_income,
-        numerator_must_be_positive=True,
-        denominator_must_be_positive=True,
+    free_cash_flow = _number(
+        snapshot.free_cash_flow
+    )
+
+    fcf_conversion = (
+        _safe_ratio(
+            free_cash_flow,
+            snapshot.net_income,
+            denominator_must_be_positive=True,
+        )
+        if (
+            free_cash_flow is not None
+            and free_cash_flow >= 0
+        )
+        else None
     )
 
     operating_cash_conversion = _safe_ratio(
@@ -1192,11 +1194,6 @@ def score_snapshot(
         net_cash,
         snapshot.market_cap,
         denominator_must_be_positive=True,
-    )
-
-    dividend_headroom = _safe_difference(
-        snapshot.fcf_yield,
-        snapshot.dividend_yield,
     )
 
     (
@@ -1319,7 +1316,7 @@ def score_snapshot(
                     2.50,
                     reverse=True,
                 ),
-                0.35,
+                0.40,
             ),
             "current_ratio": (
                 _linear_score(
@@ -1327,7 +1324,7 @@ def score_snapshot(
                     0.70,
                     2.00,
                 ),
-                0.25,
+                0.30,
             ),
             "net_cash_to_market_cap": (
                 _linear_score(
@@ -1335,15 +1332,7 @@ def score_snapshot(
                     -0.60,
                     0.20,
                 ),
-                0.25,
-            ),
-            "interest_coverage": (
-                _linear_score(
-                    snapshot.interest_coverage,
-                    1.50,
-                    10.00,
-                ),
-                0.15,
+                0.30,
             ),
         },
         "growth": {
@@ -1365,13 +1354,13 @@ def score_snapshot(
             ),
         },
         "capital_allocation": {
-            "fcf_conversion": (
+            "dividend_yield": (
                 _linear_score(
-                    fcf_conversion,
-                    0.50,
-                    1.30,
+                    snapshot.dividend_yield,
+                    0.0,
+                    0.06,
                 ),
-                0.40,
+                0.50,
             ),
             "roe_proxy": (
                 _linear_score(
@@ -1379,15 +1368,7 @@ def score_snapshot(
                     0.05,
                     0.30,
                 ),
-                0.35,
-            ),
-            "dividend_headroom": (
-                _linear_score(
-                    dividend_headroom,
-                    -0.02,
-                    0.06,
-                ),
-                0.25,
+                0.50,
             ),
         },
         "momentum_fundamental": {
@@ -1397,15 +1378,7 @@ def score_snapshot(
                     -0.15,
                     0.25,
                 ),
-                0.45,
-            ),
-            "revenue_growth": (
-                _linear_score(
-                    snapshot.revenue_growth,
-                    -0.10,
-                    0.20,
-                ),
-                0.35,
+                0.80,
             ),
             "analyst_upside": (
                 _linear_score(
@@ -1417,30 +1390,36 @@ def score_snapshot(
             ),
         },
         "risk": {
-            "interest_coverage": (
+            "debt_to_equity": (
                 _linear_score(
-                    snapshot.interest_coverage,
-                    1.50,
-                    12.00,
+                    debt_to_equity,
+                    0.20,
+                    3.00,
+                    reverse=True,
                 ),
                 0.50,
             ),
-            "net_cash_to_market_cap": (
+            "balance_liquidity": (
                 _linear_score(
-                    net_cash_to_market_cap,
-                    -0.60,
-                    0.20,
+                    snapshot.current_ratio,
+                    0.70,
+                    2.00,
                 ),
                 0.50,
             ),
         },
     }
 
-    parts: dict[str, float] = {}
+    parts: dict[
+        str,
+        float,
+    ] = {}
+
     dimension_coverage: dict[
         str,
         float,
     ] = {}
+
     missing_metrics: list[str] = []
 
     for (
@@ -1455,12 +1434,13 @@ def score_snapshot(
             metrics
         )
 
-        parts[dimension] = (
-            dimension_score
-        )
-        dimension_coverage[dimension] = (
-            coverage
-        )
+        parts[
+            dimension
+        ] = dimension_score
+
+        dimension_coverage[
+            dimension
+        ] = coverage
 
         missing_metrics.extend(
             f"{dimension}.{metric}"
@@ -1486,8 +1466,12 @@ def score_snapshot(
 
     recommendation = _radar_recommendation(
         global_score=global_score,
-        valuation=parts["valuation"],
-        balance=parts["balance"],
+        valuation=parts[
+            "valuation"
+        ],
+        balance=parts[
+            "balance"
+        ],
         confidence=confidence,
         overall_coverage=overall_coverage,
         dimension_coverage=dimension_coverage,
@@ -1550,15 +1534,14 @@ def score_snapshot(
         > 0.0
     ):
         warnings.append(
-            "La asignación de capital es todavía una "
-            "aproximación basada en conversión de caja, ROE "
-            "y cobertura potencial del dividendo."
+            "La asignación de capital es una aproximación "
+            "preliminar basada en dividendos y ROE."
         )
 
     if analyst_upside is not None:
         warnings.append(
-            "El consenso de analistas solo representa una "
-            "señal secundaria del momentum fundamental."
+            "El precio objetivo de analistas solo se utiliza "
+            "como señal secundaria del momentum fundamental."
         )
 
     rationale = _build_rationale(
@@ -1569,18 +1552,30 @@ def score_snapshot(
 
     return ScoreCard(
         ticker=snapshot.ticker,
-        valuation=parts["valuation"],
-        quality=parts["quality"],
-        cash=parts["cash"],
-        balance=parts["balance"],
-        growth=parts["growth"],
+        valuation=parts[
+            "valuation"
+        ],
+        quality=parts[
+            "quality"
+        ],
+        cash=parts[
+            "cash"
+        ],
+        balance=parts[
+            "balance"
+        ],
+        growth=parts[
+            "growth"
+        ],
         capital_allocation=parts[
             "capital_allocation"
         ],
         momentum_fundamental=parts[
             "momentum_fundamental"
         ],
-        risk=parts["risk"],
+        risk=parts[
+            "risk"
+        ],
         confidence=confidence,
         global_score=global_score,
         recommendation=recommendation,
