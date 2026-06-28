@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from src.domain.contracts import (
+    DOMAIN_CONTRACT_SCHEMA_VERSION,
+    DataIssue,
+    DimensionScore,
+    FieldProvenance,
+    MetricAssessment,
+)
 from src.domain.enums import (
     ComparabilityStatus,
     EligibilityStatus,
@@ -24,10 +31,15 @@ from src.domain.serialization import (
 )
 
 __all__ = [
+    "DOMAIN_CONTRACT_SCHEMA_VERSION",
     "ComparabilityStatus",
+    "DataIssue",
+    "DimensionScore",
     "EligibilityStatus",
+    "FieldProvenance",
     "IssueCategory",
     "IssueSeverity",
+    "MetricAssessment",
     "RunStatus",
     "SerializationError",
     "bounded_ratio",
