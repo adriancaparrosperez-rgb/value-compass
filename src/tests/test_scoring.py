@@ -27,20 +27,17 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "risk": 0.05,
 }
 
-
 DEFAULT_THRESHOLDS: dict[str, float] = {
     "priority": 80.0,
     "candidate": 70.0,
     "watch": 58.0,
 }
 
-
 LEGACY_THRESHOLDS: dict[str, float] = {
     "strong_entry": 80.0,
     "entry": 70.0,
     "watch": 58.0,
 }
-
 
 VALID_RADAR_RECOMMENDATIONS = {
     RADAR_PRIORITY,
@@ -54,10 +51,7 @@ def build_snapshot(
     **overrides: Any,
 ) -> CompanySnapshot:
     """
-    Genera un snapshot completo y estable para los tests.
-
-    Los valores pueden modificarse mediante overrides sin
-    repetir toda la construcción del objeto.
+    Genera un snapshot completo, determinista y sin proveedores.
     """
     values: dict[str, Any] = {
         "ticker": "TEST",
@@ -122,15 +116,11 @@ def run_scoring(
     min_confidence: float = 55.0,
     min_coverage: float = 50.0,
 ) -> ScoreCard:
-    """
-    Ejecuta el scoring con una configuración homogénea.
-    """
     selected_weights = (
         DEFAULT_WEIGHTS
         if weights is None
         else weights
     )
-
     selected_thresholds = (
         DEFAULT_THRESHOLDS
         if thresholds is None
@@ -151,7 +141,7 @@ def run_scoring(
 # ============================================================
 
 
-def test_complete_snapshot_generates_reliable_radar_result() -> None:
+def test_complete_snapshot_generates_reliable_result() -> None:
     card = run_scoring(
         build_snapshot()
     )
@@ -160,29 +150,27 @@ def test_complete_snapshot_generates_reliable_radar_result() -> None:
     assert card.overall_coverage == 100.0
     assert card.confidence >= 55.0
     assert not card.missing_metrics
-    assert card.scoring_version == "2.0.0"
+    assert card.scoring_version == "2.2.0"
 
 
-def test_sparse_snapshot_is_classified_as_unreliable() -> None:
-    snapshot = CompanySnapshot(
-        ticker="X",
-        price=10.0,
-        market_cap=100.0,
-        data_quality=20.0,
-    )
-
+def test_sparse_snapshot_is_unreliable() -> None:
     card = run_scoring(
-        snapshot
+        CompanySnapshot(
+            ticker="X",
+            price=10.0,
+            market_cap=100.0,
+            data_quality=20.0,
+        )
     )
 
     assert card.recommendation == RADAR_UNRELIABLE
-    assert card.recommendation == "DATOS NO FIABLES"
-    assert card.confidence < 55.0
     assert card.overall_coverage == 0.0
+    assert card.global_score == 0.0
+    assert card.confidence == 0.0
     assert card.missing_metrics
 
 
-def test_missing_price_blocks_radar_classification() -> None:
+def test_missing_price_blocks_classification() -> None:
     card = run_scoring(
         build_snapshot(
             price=None
@@ -192,7 +180,7 @@ def test_missing_price_blocks_radar_classification() -> None:
     assert card.recommendation == RADAR_UNRELIABLE
 
 
-def test_provider_error_limits_confidence() -> None:
+def test_provider_error_caps_confidence() -> None:
     card = run_scoring(
         build_snapshot(
             errors="Provider failure"
@@ -203,7 +191,7 @@ def test_provider_error_limits_confidence() -> None:
     assert card.confidence <= 20.0
 
 
-def test_critical_missing_fields_limit_confidence() -> None:
+def test_critical_missing_fields_block_classification() -> None:
     card = run_scoring(
         build_snapshot(
             critical_missing_fields=[
@@ -217,23 +205,22 @@ def test_critical_missing_fields_limit_confidence() -> None:
 
 
 # ============================================================
-# COBERTURA Y DATOS AUSENTES
+# COBERTURA Y MÉTRICAS AUSENTES
 # ============================================================
 
 
 def test_snapshot_without_metrics_has_zero_coverage() -> None:
-    snapshot = CompanySnapshot(
-        ticker="EMPTY",
-        price=10.0,
-        market_cap=100.0,
-        data_quality=100.0,
-    )
-
     card = run_scoring(
-        snapshot
+        CompanySnapshot(
+            ticker="EMPTY",
+            price=10.0,
+            market_cap=100.0,
+            data_quality=100.0,
+        )
     )
 
     assert card.overall_coverage == 0.0
+    assert card.global_score == 0.0
     assert card.recommendation == RADAR_UNRELIABLE
 
     assert all(
@@ -264,6 +251,7 @@ def test_snapshot_without_metrics_has_zero_coverage() -> None:
             {
                 "valuation.fcf_yield",
                 "cash.fcf_yield",
+                "capital_allocation.dividend_headroom",
             },
         ),
         (
@@ -288,14 +276,12 @@ def test_invalid_metrics_are_treated_as_missing(
     invalid_value: Any,
     expected_missing_metrics: set[str],
 ) -> None:
-    snapshot = build_snapshot(
-        **{
-            field_name: invalid_value,
-        }
-    )
-
     card = run_scoring(
-        snapshot
+        build_snapshot(
+            **{
+                field_name: invalid_value,
+            }
+        )
     )
 
     assert expected_missing_metrics.issubset(
@@ -305,17 +291,55 @@ def test_invalid_metrics_are_treated_as_missing(
     )
 
 
-def test_partial_coverage_generates_warning() -> None:
-    snapshot = CompanySnapshot(
-        ticker="PARTIAL",
-        price=100.0,
-        market_cap=1_000.0,
-        forward_pe=15.0,
-        data_quality=90.0,
+def test_unobserved_dimensions_do_not_add_neutral_points() -> None:
+    card = run_scoring(
+        CompanySnapshot(
+            ticker="ONLY-VALUATION",
+            price=100.0,
+            market_cap=1_000.0,
+            forward_pe=15.0,
+            data_quality=100.0,
+        ),
+        min_coverage=0.0,
+        min_confidence=0.0,
     )
 
+    assert card.dimension_coverage["valuation"] == 25.0
+    assert card.global_score == pytest.approx(
+        card.valuation,
+        abs=0.1,
+    )
+
+
+def test_unobserved_dimensions_are_not_presented_as_scores() -> None:
     card = run_scoring(
-        snapshot
+        CompanySnapshot(
+            ticker="ONLY-VALUATION",
+            price=100.0,
+            market_cap=1_000.0,
+            forward_pe=15.0,
+            data_quality=100.0,
+        ),
+        min_coverage=0.0,
+        min_confidence=0.0,
+    )
+
+    rationale = card.rationale.casefold()
+
+    assert "valoración" in rationale
+    assert "rentabilidad y calidad 50" not in rationale
+    assert "generación de caja 50" not in rationale
+
+
+def test_partial_coverage_generates_warning() -> None:
+    card = run_scoring(
+        CompanySnapshot(
+            ticker="PARTIAL",
+            price=100.0,
+            market_cap=1_000.0,
+            forward_pe=15.0,
+            data_quality=90.0,
+        )
     )
 
     assert card.overall_coverage < 70.0
@@ -328,7 +352,110 @@ def test_partial_coverage_generates_warning() -> None:
 
 
 # ============================================================
-# DEUDA Y BALANCE
+# CAJA Y CONVERSIÓN DEL BENEFICIO
+# ============================================================
+
+
+@pytest.mark.parametrize(
+    (
+        "net_income",
+        "free_cash_flow",
+    ),
+    [
+        (
+            -50.0,
+            -100.0,
+        ),
+        (
+            -50.0,
+            100.0,
+        ),
+        (
+            50.0,
+            -100.0,
+        ),
+        (
+            0.0,
+            100.0,
+        ),
+        (
+            50.0,
+            0.0,
+        ),
+        (
+            None,
+            100.0,
+        ),
+        (
+            50.0,
+            None,
+        ),
+    ],
+)
+def test_fcf_conversion_requires_positive_values(
+    net_income: float | None,
+    free_cash_flow: float | None,
+) -> None:
+    card = run_scoring(
+        build_snapshot(
+            net_income=net_income,
+            free_cash_flow=free_cash_flow,
+        )
+    )
+
+    assert (
+        "cash.fcf_conversion"
+        in card.missing_metrics
+    )
+    assert (
+        "capital_allocation.fcf_conversion"
+        in card.missing_metrics
+    )
+
+
+def test_positive_profit_and_fcf_enable_conversion() -> None:
+    card = run_scoring(
+        build_snapshot(
+            net_income=3_000.0,
+            free_cash_flow=3_000.0,
+        )
+    )
+
+    assert (
+        "cash.fcf_conversion"
+        not in card.missing_metrics
+    )
+
+
+def test_operating_cash_conversion_requires_positive_profit() -> None:
+    card = run_scoring(
+        build_snapshot(
+            net_income=-100.0,
+            operating_cash_flow=200.0,
+        )
+    )
+
+    assert (
+        "cash.operating_cash_conversion"
+        in card.missing_metrics
+    )
+
+
+def test_dividend_headroom_requires_both_yields() -> None:
+    card = run_scoring(
+        build_snapshot(
+            dividend_yield=None
+        )
+    )
+
+    assert (
+        "capital_allocation.dividend_headroom"
+        in card.missing_metrics
+    )
+
+
+# ============================================================
+# BALANCE Y RESILIENCIA
 # ============================================================
 
 
@@ -344,13 +471,8 @@ def test_negative_debt_to_equity_is_rejected() -> None:
         in card.missing_metrics
     )
 
-    assert (
-        "risk.debt_to_equity"
-        in card.missing_metrics
-    )
-
     assert any(
-        "debt-to-equity es negativo"
+        "patrimonio neto negativo"
         in warning.casefold()
         for warning in card.warnings
     )
@@ -375,20 +497,6 @@ def test_yahoo_percentage_debt_to_equity_is_normalized() -> None:
     )
 
 
-def test_net_cash_requires_cash_and_debt() -> None:
-    card = run_scoring(
-        build_snapshot(
-            total_cash=20_000.0,
-            total_debt=None,
-        )
-    )
-
-    assert (
-        "balance.net_cash_to_market_cap"
-        in card.missing_metrics
-    )
-
-
 @pytest.mark.parametrize(
     (
         "total_cash",
@@ -409,7 +517,7 @@ def test_net_cash_requires_cash_and_debt() -> None:
         ),
     ],
 )
-def test_incomplete_cash_or_debt_prevents_net_cash_scoring(
+def test_net_cash_requires_cash_and_debt(
     total_cash: float | None,
     total_debt: float | None,
 ) -> None:
@@ -424,9 +532,13 @@ def test_incomplete_cash_or_debt_prevents_net_cash_scoring(
         "balance.net_cash_to_market_cap"
         in card.missing_metrics
     )
+    assert (
+        "risk.net_cash_to_market_cap"
+        in card.missing_metrics
+    )
 
 
-def test_complete_cash_and_debt_enable_net_cash_scoring() -> None:
+def test_complete_balance_enables_net_cash_scoring() -> None:
     card = run_scoring(
         build_snapshot(
             total_cash=20_000.0,
@@ -440,8 +552,127 @@ def test_complete_cash_and_debt_enable_net_cash_scoring() -> None:
     )
 
 
+def test_risk_score_does_not_depend_on_provider_quality() -> None:
+    high_quality_card = run_scoring(
+        build_snapshot(
+            data_quality=100.0,
+            validity_score=100.0,
+            consistency_score=100.0,
+        )
+    )
+
+    low_quality_card = run_scoring(
+        build_snapshot(
+            data_quality=20.0,
+            validity_score=20.0,
+            consistency_score=20.0,
+        )
+    )
+
+    assert (
+        high_quality_card.risk
+        == low_quality_card.risk
+    )
+    assert (
+        high_quality_card.confidence
+        > low_quality_card.confidence
+    )
+
+
+def test_missing_interest_coverage_reduces_balance_and_risk_coverage() -> None:
+    card = run_scoring(
+        build_snapshot(
+            interest_coverage=None
+        )
+    )
+
+    assert (
+        "balance.interest_coverage"
+        in card.missing_metrics
+    )
+    assert (
+        "risk.interest_coverage"
+        in card.missing_metrics
+    )
+
+
 # ============================================================
-# CONFIGURACIÓN
+# CONSENSO DE ANALISTAS
+# ============================================================
+
+
+def test_analyst_target_is_secondary_signal() -> None:
+    card = run_scoring(
+        build_snapshot(
+            analyst_target=125.0,
+            analyst_count=20,
+        )
+    )
+
+    assert (
+        "momentum_fundamental.analyst_upside"
+        not in card.missing_metrics
+    )
+
+    assert any(
+        "señal secundaria"
+        in warning.casefold()
+        for warning in card.warnings
+    )
+
+
+def test_missing_target_leaves_eighty_percent_momentum_coverage() -> None:
+    card = run_scoring(
+        build_snapshot(
+            analyst_target=None
+        )
+    )
+
+    assert (
+        "momentum_fundamental.analyst_upside"
+        in card.missing_metrics
+    )
+    assert (
+        card.dimension_coverage[
+            "momentum_fundamental"
+        ]
+        == 80.0
+    )
+
+
+@pytest.mark.parametrize(
+    "analyst_count",
+    [
+        None,
+        0,
+        1,
+        2,
+    ],
+)
+def test_target_requires_minimum_analyst_count(
+    analyst_count: int | None,
+) -> None:
+    card = run_scoring(
+        build_snapshot(
+            analyst_target=125.0,
+            analyst_count=analyst_count,
+        )
+    )
+
+    assert (
+        "momentum_fundamental.analyst_upside"
+        in card.missing_metrics
+    )
+
+    assert any(
+        "requiere al menos 3 analistas"
+        in warning.casefold()
+        for warning in card.warnings
+    )
+
+
+# ============================================================
+# CONFIGURACIÓN Y VALIDACIÓN
 # ============================================================
 
 
@@ -535,18 +766,14 @@ def test_invalid_argument_types_raise_type_error(
         )
 
 
-# ============================================================
-# VALORES Y LÍMITES
-# ============================================================
-
-
-def test_all_scores_remain_between_zero_and_one_hundred() -> None:
+def test_scores_remain_in_valid_range() -> None:
     card = run_scoring(
         build_snapshot(
             fcf_yield=1000.0,
             roe=1000.0,
             revenue_growth=1000.0,
             current_ratio=1000.0,
+            interest_coverage=1000.0,
         )
     )
 
@@ -570,140 +797,13 @@ def test_all_scores_remain_between_zero_and_one_hundred() -> None:
     )
 
 
-def test_analyst_target_is_only_a_secondary_signal() -> None:
-    card = run_scoring(
-        build_snapshot(
-            analyst_target=125.0
-        )
-    )
-
-    assert (
-        "momentum_fundamental.analyst_upside"
-        not in card.missing_metrics
-    )
-
-    assert any(
-        "precio objetivo de analistas"
-        in warning.casefold()
-        for warning in card.warnings
-    )
-
-
-def test_missing_analyst_target_reduces_momentum_coverage() -> None:
-    card = run_scoring(
-        build_snapshot(
-            analyst_target=None
-        )
-    )
-
-    assert (
-        "momentum_fundamental.analyst_upside"
-        in card.missing_metrics
-    )
-
-    assert (
-        card.dimension_coverage[
-            "momentum_fundamental"
-        ]
-        == 50.0
-    )
-
-
-def test_capital_allocation_is_explicitly_preliminary() -> None:
+def test_capital_allocation_warning_is_explicit() -> None:
     card = run_scoring(
         build_snapshot()
     )
 
     assert any(
-        "asignación de capital es una aproximación"
+        "asignación de capital es todavía una aproximación"
         in warning.casefold()
         for warning in card.warnings
-    )
-
-
-# ============================================================
-# DEUDA TÉCNICA METODOLÓGICA
-#
-# Estos tres tests documentan comportamientos todavía pendientes.
-# Permanecen como xfail hasta corregir models.py y engine.py.
-# ============================================================
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "La conversión FCF puede resultar positiva cuando "
-        "FCF y beneficio neto son negativos."
-    ),
-)
-def test_negative_profit_does_not_create_valid_fcf_conversion() -> None:
-    card = run_scoring(
-        build_snapshot(
-            net_income=-50.0,
-            free_cash_flow=-100.0,
-        )
-    )
-
-    assert (
-        "cash.fcf_conversion"
-        in card.missing_metrics
-    )
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "La calidad del proveedor pertenece a confianza, "
-        "no a riesgo empresarial."
-    ),
-)
-def test_risk_score_does_not_depend_on_provider_quality() -> None:
-    high_quality_card = run_scoring(
-        build_snapshot(
-            data_quality=100.0
-        )
-    )
-
-    low_quality_card = run_scoring(
-        build_snapshot(
-            data_quality=20.0
-        )
-    )
-
-    assert (
-        high_quality_card.risk
-        == low_quality_card.risk
-    )
-
-    assert (
-        high_quality_card.confidence
-        != low_quality_card.confidence
-    )
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Las dimensiones sin datos reciben actualmente 50 "
-        "puntos y afectan al score global."
-    ),
-)
-def test_unobserved_dimensions_do_not_add_neutral_points() -> None:
-    snapshot = CompanySnapshot(
-        ticker="ONLY-VALUATION",
-        price=100.0,
-        market_cap=1_000.0,
-        forward_pe=15.0,
-        data_quality=100.0,
-    )
-
-    card = run_scoring(
-        snapshot,
-        min_coverage=0.0,
-        min_confidence=0.0,
-    )
-
-    assert card.global_score == pytest.approx(
-        card.valuation,
-        abs=0.1,
     )
