@@ -547,6 +547,13 @@ class CompanySnapshot:
             )
             or 0.0
         )
+        self.validity_score = (
+            bounded_score(
+                self.validity_score,
+                default=0.0,
+            )
+            or 0.0
+        )
         self.freshness_score = (
             bounded_score(
                 self.freshness_score,
